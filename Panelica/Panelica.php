@@ -127,14 +127,27 @@ class Panelica_Module extends ServerModule
             $plans[$selected] = $selected . ' (kayıtlı seçim; sunucuda doğrulanamadı)';
         }
         if (!$plans) { $plans[''] = 'Plan listesi yüklenemedi — modül kayıtlarını kontrol edin'; }
-        return array('plan' => array(
-            'wrap_width' => 100,
-            'name' => 'Panelica Hosting Plan',
-            'description' => $loadError !== '' ? $loadError : 'Panelica sunucusunda kullanılacak hosting paketini seçin.',
-            'type' => 'dropdown',
-            'options' => $plans,
-            'value' => $selected,
-        ));
+        $sslAutoIssue = $this->selectedSettingValue($data, array('ssl_auto_issue'));
+        if ($sslAutoIssue === '') { $sslAutoIssue = '0'; }
+
+        return array(
+            'plan' => array(
+                'wrap_width' => 100,
+                'name' => 'Panelica Hosting Plan',
+                'description' => $loadError !== '' ? $loadError : 'Panelica sunucusunda kullanılacak hosting paketini seçin.',
+                'type' => 'dropdown',
+                'options' => $plans,
+                'value' => $selected,
+            ),
+            'ssl_auto_issue' => array(
+                'wrap_width' => 100,
+                'name' => 'Otomatik SSL sertifikası oluştur',
+                'description' => 'Açıkken yeni hosting alan adı için SSL sertifikası alınır. Kapalı yapmak mevcut sertifikayı silmez.',
+                'type' => 'dropdown',
+                'options' => array('0' => 'Kapalı', '1' => 'Açık'),
+                'value' => $sslAutoIssue,
+            ),
+        );
     }
 
     public function create($domain_or_options = '', $order_options = array())
@@ -176,6 +189,14 @@ class Panelica_Module extends ServerModule
                 $this->logPlanSelectionDiagnostic($order_options, $values, $productPlanSources);
                 throw new Exception('WISECP ürün ayarlarında Panelica hosting paketi seçilmemiş. Ürün > Otomasyon > Modül Yapılandırması bölümünden paketi seçip kaydedin.');
             }
+            $sslAutoIssue = $this->selectedSettingValue($values, array('ssl_auto_issue'));
+            if ($sslAutoIssue === '') {
+                foreach ($productPlanSources ?: $this->productPlanSources() as $productData) {
+                    $sslAutoIssue = $this->selectedSettingValue($productData, array('ssl_auto_issue'));
+                    if ($sslAutoIssue !== '') { break; }
+                }
+            }
+            $sslAutoIssue = in_array(strtolower((string) $sslAutoIssue), array('1', 'true', 'yes', 'on'), true);
             $plan = $this->findPlan($planName);
             if (!$plan || empty($plan['id'])) {
                 throw new Exception('Seçilen Panelica paketi sunucudaki planlarla eşleşmiyor. Ürün modül ayarındaki paketi yenileyip tekrar kaydedin.');
@@ -235,11 +256,37 @@ class Panelica_Module extends ServerModule
 
             $domains = $this->api->listAccountDomains($accountId);
             $found = false;
+            $domainId = '';
             foreach ((isset($domains['data']) && is_array($domains['data']) ? $domains['data'] : array()) as $existing) {
                 $existingName = isset($existing['name']) ? $existing['name'] : (isset($existing['domain']) ? $existing['domain'] : '');
-                if (strcasecmp($existingName, $domain) === 0) { $found = true; break; }
+                if (strcasecmp($existingName, $domain) === 0) {
+                    $found = true;
+                    $domainId = isset($existing['id']) ? (string) $existing['id'] : '';
+                    break;
+                }
             }
-            if (!$found) { $this->api->createDomain($domain, $accountId); }
+            if (!$found) {
+                $createdDomain = $this->api->createDomain($domain, $accountId);
+                $createdDomainData = isset($createdDomain['data']) && is_array($createdDomain['data']) ? $createdDomain['data'] : array();
+                $domainId = isset($createdDomainData['id']) ? (string) $createdDomainData['id'] : '';
+            }
+            if ($sslAutoIssue) {
+                if ($domainId === '') {
+                    $domains = $this->api->listAccountDomains($accountId);
+                    foreach ((isset($domains['data']) && is_array($domains['data']) ? $domains['data'] : array()) as $existing) {
+                        $existingName = isset($existing['name']) ? $existing['name'] : (isset($existing['domain']) ? $existing['domain'] : '');
+                        if (strcasecmp($existingName, $domain) === 0 && isset($existing['id'])) {
+                            $domainId = (string) $existing['id'];
+                            break;
+                        }
+                    }
+                }
+                if ($domainId === '') { throw new Exception('SSL sertifikası için Panelica alan adı kimliği alınamadı.'); }
+                $sslInfo = $this->api->getSsl($domainId);
+                $sslData = isset($sslInfo['data']) && is_array($sslInfo['data']) ? $sslInfo['data'] : $sslInfo;
+                $hasSsl = isset($sslData['has_ssl']) && filter_var($sslData['has_ssl'], FILTER_VALIDATE_BOOLEAN);
+                if (!$hasSsl) { $this->api->issueSsl($domainId); }
+            }
             $this->persistOptions();
             return array(
                 'ip' => isset($this->server['ip']) ? $this->server['ip'] : '',
@@ -689,6 +736,27 @@ class Panelica_Module extends ServerModule
             if (is_array($nested) || is_object($nested)) {
                 $plan = $this->selectedPlanValue($nested, $depth + 1);
                 if ($plan !== '') { return $plan; }
+            }
+        }
+        return '';
+    }
+
+    private function selectedSettingValue($source, $keys, $depth = 0)
+    {
+        if (is_string($source)) {
+            $decoded = json_decode($source, true);
+            if (is_array($decoded)) { $source = $decoded; }
+        } elseif (is_object($source)) {
+            $source = (array) $source;
+        }
+        if (!is_array($source) || $depth > 3) { return ''; }
+        foreach ($keys as $key) {
+            if (isset($source[$key]) && is_scalar($source[$key])) { return trim((string) $source[$key]); }
+        }
+        foreach (array('module_data', 'module_config', 'config', 'creation_info', 'options', 'create_account') as $nestedKey) {
+            if (isset($source[$nestedKey])) {
+                $value = $this->selectedSettingValue($source[$nestedKey], $keys, $depth + 1);
+                if ($value !== '') { return $value; }
             }
         }
         return '';
