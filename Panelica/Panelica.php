@@ -333,6 +333,8 @@ class Panelica_Module extends ServerModule
             $account = $this->findAccount();
             if (!$account) { throw new Exception('WISECP hizmetine bağlı Panelica hesabı bulunamadı.'); }
             $this->api->updateAccount($account['id'], array('plan_id' => (string) $plan['id']));
+            $this->setSaved('plan', $this->planName($plan) !== '' ? $this->planName($plan) : $planName);
+            $this->setSaved('plan_id', (string) $plan['id']);
             $this->persistOptions();
             return true;
         } catch (Exception $e) { return $this->fail($e); }
@@ -340,6 +342,79 @@ class Panelica_Module extends ServerModule
 
     public function use_clientArea_SingleSignOn() { return $this->redirectSso(); }
     public function use_adminArea_SingleSignOn() { return $this->redirectSso(); }
+
+    /** WISECP 3 client-area service dashboard. */
+    public function clientArea()
+    {
+        $page = isset($this->page) && trim((string) $this->page) !== '' ? (string) $this->page : 'home';
+        $account = null;
+        $usage = array();
+        $plans = array();
+        try {
+            $account = $this->findAccount();
+            if ($account && isset($account['id'])) {
+                foreach (array('disk' => 'getDiskUsage', 'bandwidth' => 'getAccountBandwidth') as $key => $method) {
+                    try {
+                        $response = $this->api->$method($account['id']);
+                        $usage[$key] = isset($response['data']) && is_array($response['data']) ? $response['data'] : $response;
+                    } catch (Exception $e) { $usage[$key] = array(); }
+                }
+            }
+        } catch (Exception $e) {
+            $this->error = $e->getMessage();
+        }
+        if ($page === 'change-plan') {
+            try {
+                foreach ($this->getPlans() as $availablePlan) {
+                    $id = $this->firstValue($availablePlan, array('id', 'plan_id'));
+                    if ($id !== '') { $plans[$id] = $this->planName($availablePlan) ?: $id; }
+                }
+            } catch (Exception $e) { $this->error = $e->getMessage(); }
+        }
+        return $this->get_page('clientArea-' . $page, array(
+            'domain' => $this->savedValue('domain'),
+            'account_id' => $account && isset($account['id']) ? (string) $account['id'] : $this->savedValue('panelica_account_id'),
+            'username' => $this->savedValue('user') !== '' ? $this->savedValue('user') : (isset($account['username']) ? $account['username'] : ''),
+            'password' => $this->savedPassword(),
+            'plan' => $this->savedValue('plan'),
+            'plan_id' => $this->savedValue('plan_id'),
+            'usage' => $usage,
+            'plans' => $plans,
+            'error' => isset($this->error) ? $this->error : '',
+        ));
+    }
+
+    public function clientArea_buttons()
+    {
+        $page = isset($this->page) ? (string) $this->page : '';
+        if ($page !== '' && $page !== 'home') {
+            return array('home' => array('text' => 'Hizmet bilgilerine dön', 'type' => 'page-loader'));
+        }
+        return array(
+            'change-password' => array('text' => 'Hosting parolasını değiştir', 'type' => 'page-loader'),
+            'change-plan' => array('text' => 'Hosting paketini değiştir', 'type' => 'page-loader'),
+        );
+    }
+
+    /** Live, display-safe details for the WISECP order detail template. */
+    public function hostingOrderDisplayData()
+    {
+        $account = $this->findAccount();
+        if (!$account || empty($account['id'])) { return array(); }
+        $usage = array();
+        foreach (array('disk' => 'getDiskUsage', 'bandwidth' => 'getAccountBandwidth') as $key => $method) {
+            try {
+                $response = $this->api->$method($account['id']);
+                $usage[$key] = isset($response['data']) && is_array($response['data']) ? $response['data'] : $response;
+            } catch (Exception $e) { $usage[$key] = array(); }
+        }
+        return array(
+            'account_id' => (string) $account['id'],
+            'username' => isset($account['username']) ? (string) $account['username'] : $this->savedValue('user'),
+            'plan' => $this->savedValue('plan'),
+            'usage' => $usage,
+        );
+    }
 
     /** Render the hosting activation details in WISECP's client area and notices. */
     public function activation_infos($type = 'html', $order = array(), $lang = '')
@@ -390,11 +465,39 @@ class Panelica_Module extends ServerModule
             }
         }
 
+        // Read live usage from Panelica for the service detail view. A usage
+        // endpoint outage must not hide the rest of the hosting information.
+        $usage = array();
+        $accountId = isset($savedConfig['panelica_account_id']) ? (string) $savedConfig['panelica_account_id'] : '';
+        if ($accountId === '' && isset($savedConfig['user'])) {
+            try {
+                $matchedAccount = $this->findAccount();
+                if ($matchedAccount && isset($matchedAccount['id'])) { $accountId = (string) $matchedAccount['id']; }
+            } catch (Exception $e) { /* Keep the WISECP page usable if Panelica is unavailable. */ }
+        }
+        if ($accountId !== '' && $this->api) {
+            foreach (array('disk' => 'getDiskUsage', 'bandwidth' => 'getAccountBandwidth') as $key => $method) {
+                try {
+                    $response = $this->api->$method($accountId);
+                    $usage[$key] = isset($response['data']) && is_array($response['data']) ? $response['data'] : $response;
+                } catch (Exception $e) { $usage[$key] = array(); }
+            }
+        }
+        $plans = array();
+        try {
+            foreach ($this->getPlans() as $availablePlan) {
+                $planId = $this->firstValue($availablePlan, array('id', 'plan_id'));
+                if ($planId !== '') { $plans[$planId] = $this->planName($availablePlan) ?: $planId; }
+            }
+        } catch (Exception $e) { /* A read-only plan list is optional for this view. */ }
+
         $data = array(
             'module' => $this,
             'options' => $options,
             'server' => isset($this->server) && is_array($this->server) ? $this->server : array(),
             'translations' => $this->activationTranslations($lang),
+            'usage' => $usage,
+            'available_plans' => $plans,
         );
 
         return Modules::getPage('Servers', 'Panelica', 'activation-' . $type, $data);
@@ -422,6 +525,29 @@ class Panelica_Module extends ServerModule
             $this->setSaved('password', $this->encode_str($password));
             $this->persistOptions();
             echo Utility::jencode(array('status' => 'successful', 'message' => 'Şifre güncellendi.'));
+            return true;
+        } catch (Exception $e) {
+            $this->error = $e->getMessage();
+            echo Utility::jencode(array('status' => 'error', 'message' => $e->getMessage()));
+            return false;
+        }
+    }
+
+    public function use_clientArea_change_plan()
+    {
+        if (!Filter::isPOST()) { return false; }
+        $planId = Filter::init('POST/plan_id', 'string');
+        try {
+            if ($planId === '') { throw new Exception('Yeni hosting paketi seçilmedi.'); }
+            $plan = $this->findPlan($planId);
+            if (!$plan || empty($plan['id'])) { throw new Exception('Seçilen hosting paketi Panelica sunucusunda bulunamadı.'); }
+            $account = $this->findAccount();
+            if (!$account || empty($account['id'])) { throw new Exception('WISECP hizmetine bağlı Panelica hesabı bulunamadı.'); }
+            $this->api->updateAccount($account['id'], array('plan_id' => (string) $plan['id']));
+            $this->setSaved('plan', $this->planName($plan) !== '' ? $this->planName($plan) : $planId);
+            $this->setSaved('plan_id', (string) $plan['id']);
+            $this->persistOptions();
+            echo Utility::jencode(array('status' => 'successful', 'message' => 'Hosting paketi Panelica sunucusunda güncellendi.'));
             return true;
         } catch (Exception $e) {
             $this->error = $e->getMessage();
@@ -816,3 +942,4 @@ class Panelica_Module extends ServerModule
         return false;
     }
 }
+
