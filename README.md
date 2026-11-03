@@ -22,4 +22,6 @@ SSL certificate verification is enabled by default. The WISECP server's SSL veri
 
 The module loads hosting plans, provisions accounts and domains, and supports suspend, unsuspend, terminate, plan changes, single sign-on, and client password changes.
 
+Product module settings include **Otomatik SSL sertifikası oluştur**. When enabled, the module checks the new domain's SSL status and requests a certificate if one is not already active. Turning the option off prevents automatic issuance for future provisioning; the supplied API has no endpoint to remove an existing certificate.
+
 Live connection and lifecycle tests require a WISECP installation and a Panelica server; those were not available in this workspace.
