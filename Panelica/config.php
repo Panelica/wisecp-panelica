@@ -9,8 +9,5 @@ return array(
     'server-info-port' => true,
     'server-info-not-secure-port' => 8443,
     'server-info-secure-port' => 8443,
-    'fields' => array(
-        'api_key' => array('type' => 'password', 'name' => 'API_KEY', 'crypt' => true),
-    ),
     'configurable-option-params' => array(),
 );
