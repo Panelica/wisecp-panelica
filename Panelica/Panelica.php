@@ -27,12 +27,6 @@ class Panelica_Module extends ServerModule
         $verifyTls = is_array($moduleConfig) && array_key_exists('panelica-verify-tls', $moduleConfig)
             ? (bool) $moduleConfig['panelica-verify-tls']
             : true;
-        foreach (array('verify_ssl', 'ssl_verify', 'verify_ssl_certificate', 'ssl-verify') as $verifyKey) {
-            if (array_key_exists($verifyKey, $server)) {
-                $verifyTls = filter_var($server[$verifyKey], FILTER_VALIDATE_BOOLEAN);
-                break;
-            }
-        }
         $this->api = new PanelicaAPI($host, $port, $key, $secret, $verifyTls);
         $this->apiReady = ($host !== '' && $username !== '' && $key !== '' && $secret !== '');
         $this->apiServerId = isset($server['id']) ? (string) $server['id'] : (isset($server['server_id']) ? (string) $server['server_id'] : '');
