@@ -2,8 +2,8 @@
 return array(
     'type' => 'hosting',
     'access-hash' => false,
-    // The target Panelica endpoint uses a self-signed certificate, matching the supplied SDK.
-    // Set true after installing a publicly trusted certificate on the Panelica server.
+    // TLS certificate verification is enabled by default. WISECP's per-server SSL
+    // verification setting overrides this value in define_server_info().
     'panelica-verify-tls' => true,
     'server-info-checker' => true,
     'server-info-port' => true,
