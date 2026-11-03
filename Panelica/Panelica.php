@@ -183,6 +183,14 @@ class Panelica_Module extends ServerModule
                 $this->logPlanSelectionDiagnostic($order_options, $values, $productPlanSources);
                 throw new Exception('WISECP ürün ayarlarında Panelica hosting paketi seçilmemiş. Ürün > Otomasyon > Modül Yapılandırması bölümünden paketi seçip kaydedin.');
             }
+            $resellerValue = $this->selectedSettingValue($values, array('reseller'));
+            $accountRole = in_array(strtolower($resellerValue), array('1', 'true', 'yes', 'on'), true) ? 'RESELLER' : 'USER';
+            if ($accountRole === 'RESELLER') {
+                $ownerRole = $this->getApiOwnerRole();
+                if (!in_array($ownerRole, array('ROOT', 'ADMIN'), true)) {
+                    throw new Exception('Panelica API kullanıcısı reseller hesabı oluşturma yetkisine sahip değil. ROOT veya ADMIN API anahtarı kullanın.');
+                }
+            }
             $sslAutoIssue = $this->selectedSettingValue($values, array('ssl_auto_issue'));
             if ($sslAutoIssue === '') {
                 foreach ($productPlanSources ?: $this->productPlanSources() as $productData) {
@@ -227,18 +235,18 @@ class Panelica_Module extends ServerModule
             $this->setSaved('user', $username);
             $this->setSaved('password', $this->encode_str($password));
             $this->persistOptions();
-            $account = $this->api->findAccountByUsername($username);
+            $account = $this->api->findAccountByUsername($username, $accountRole);
             if (!$account) {
                 try {
-                    $created = $this->api->createAccount($username, $password, $email, $name, (string) $plan['id']);
+                    $created = $this->api->createAccount($username, $password, $email, $name, (string) $plan['id'], $accountRole);
                 } catch (Exception $e) {
                     $taggedEmail = $this->taggedEmail($email);
                     if ($taggedEmail === '' || stripos($e->getMessage(), 'email') === false) { throw $e; }
-                    $created = $this->api->createAccount($username, $password, $taggedEmail, $name, (string) $plan['id']);
+                    $created = $this->api->createAccount($username, $password, $taggedEmail, $name, (string) $plan['id'], $accountRole);
                 }
                 $account = isset($created['data']) && is_array($created['data']) ? $created['data'] : array();
                 if (empty($account['id'])) {
-                    $account = $this->api->findAccountByUsername($username);
+                    $account = $this->api->findAccountByUsername($username, $accountRole);
                 }
             }
             if (!$account || empty($account['id'])) {
@@ -246,6 +254,9 @@ class Panelica_Module extends ServerModule
             }
             $accountId = (string) $account['id'];
             $this->setSaved('panelica_account_id', $accountId);
+            $this->setSaved('panelica_account_role', $accountRole);
+            $this->setSaved('plan', $this->planName($plan) !== '' ? $this->planName($plan) : $planName);
+            $this->setSaved('plan_id', (string) $plan['id']);
             $this->persistOptions();
 
             $domains = $this->api->listAccountDomains($accountId);
@@ -414,6 +425,92 @@ class Panelica_Module extends ServerModule
             'plan' => $this->savedValue('plan'),
             'usage' => $usage,
         );
+    }
+
+    /** The API key inherits this role; Panelica enforces role permissions server-side. */
+    public function getApiOwnerRole()
+    {
+        try {
+            $response = $this->api->me();
+            $data = isset($response['data']) && is_array($response['data']) ? $response['data'] : array();
+            if (isset($data['user']['role'])) { return strtoupper((string) $data['user']['role']); }
+            if (isset($data['role'])) { return strtoupper((string) $data['role']); }
+        } catch (Exception $e) { $this->error = $e->getMessage(); }
+        return '';
+    }
+
+    /** Template helper: decrypt only for the authorized WISECP service editor. */
+    public function getSavedPasswordForAdminTemplate()
+    {
+        return $this->savedPassword();
+    }
+
+    /** Persist WISECP's admin service editor values and apply supported changes on Panelica. */
+    public function save_adminArea_service_fields($data = array())
+    {
+        $data = is_array($data) ? $data : array();
+        $config = isset($data['config']) && is_array($data['config']) ? $data['config'] : array();
+        $creationInfo = isset($data['creation_info']) && is_array($data['creation_info']) ? $data['creation_info'] : array();
+        $username = isset($config['user']) ? trim((string) $config['user']) : $this->savedValue('user');
+        $oldUsername = $this->savedValue('user');
+        if ($oldUsername !== '' && $username !== $oldUsername) {
+            throw new Exception('Panelica API kullanıcı adını değiştirmeye izin vermiyor. Hosting kullanıcı adı değiştirilemez.');
+        }
+
+        $newPassword = isset($config['password']) ? trim((string) $config['password']) : '';
+        $oldPassword = $this->savedPassword();
+        if ($newPassword === '' || $newPassword === '*******') { $newPassword = $oldPassword; }
+        if ($newPassword !== '' && $newPassword !== $oldPassword && strlen($newPassword) < 8) {
+            throw new Exception('Hosting parolası en az 8 karakter olmalıdır.');
+        }
+
+        $planName = isset($creationInfo['plan']) ? trim((string) $creationInfo['plan']) : $this->savedValue('plan');
+        $plan = $planName !== '' ? $this->findPlan($planName) : null;
+        if ($planName !== '' && (!$plan || empty($plan['id']))) {
+            throw new Exception('Seçilen Panelica hosting paketi sunucuda bulunamadı.');
+        }
+        $oldRole = strtoupper($this->savedValue('panelica_account_role'));
+        if ($oldRole === '') { $oldRole = 'USER'; }
+        $isReseller = array_key_exists('reseller', $creationInfo)
+            ? in_array(strtolower((string) $creationInfo['reseller']), array('1', 'true', 'yes', 'on'), true)
+            : ($oldRole === 'RESELLER');
+        $newRole = $isReseller ? 'RESELLER' : 'USER';
+        if ($newRole === 'RESELLER' && $oldRole !== 'RESELLER' && !in_array($this->getApiOwnerRole(), array('ROOT', 'ADMIN'), true)) {
+            throw new Exception('Bu Panelica API kullanıcısı reseller rolü veremez. ROOT veya ADMIN API anahtarı kullanın.');
+        }
+
+        $account = null;
+        try { $account = $this->findAccount(); } catch (Exception $e) { /* Unprovisioned service: save choices for create(). */ }
+        if (!$account && $username !== '') {
+            $legacyRole = $oldRole === 'RESELLER' || $isReseller ? 'RESELLER' : 'USER';
+            try { $account = $this->api->findAccountByUsername($username, $legacyRole); } catch (Exception $e) { /* The account may not exist yet. */ }
+        }
+        if ($account && !empty($account['id'])) {
+            $changes = array();
+            if ($newRole !== $oldRole) { $changes['role'] = $newRole; }
+            if ($plan && isset($plan['id']) && (string) $plan['id'] !== $this->savedValue('plan_id')) { $changes['plan_id'] = (string) $plan['id']; }
+            if ($changes) { $this->api->updateAccount($account['id'], $changes); }
+            if ($newPassword !== '' && $newPassword !== $oldPassword) {
+                $this->api->changeAccountPassword($account['id'], $newPassword);
+            }
+        }
+
+        if (!isset($config['user']) || $config['user'] === '') { $config['user'] = $username; }
+        if ($newPassword !== '') { $config['password'] = $this->encode_str($newPassword); }
+        $config['panelica_account_role'] = $newRole;
+        if ($plan) {
+            $creationInfo['plan'] = $this->planName($plan) !== '' ? $this->planName($plan) : $planName;
+            $config['plan'] = $creationInfo['plan'];
+            $config['plan_id'] = (string) $plan['id'];
+        }
+        $creationInfo['reseller'] = $isReseller ? '1' : '0';
+
+        $login = isset($this->options['login']) && is_array($this->options['login']) ? $this->options['login'] : array();
+        if ($newPassword !== '') { $login['password'] = $this->encode_str($newPassword); }
+        $this->options['config'] = array_merge(isset($this->options['config']) && is_array($this->options['config']) ? $this->options['config'] : array(), $config);
+        $this->options['creation_info'] = $creationInfo;
+        $this->options['login'] = $login;
+        return array('config' => $this->options['config'], 'creation_info' => $creationInfo, 'login' => $login);
     }
 
     /** Render the hosting activation details in WISECP's client area and notices. */
@@ -598,10 +695,13 @@ class Panelica_Module extends ServerModule
             throw new Exception('Panelica hesabı bulunamadı: WISECP modül çağrısında hizmet hesap bilgileri yok.');
         }
         $result = $this->api->listAccounts();
+        $expectedRole = strtoupper($this->savedValue('panelica_account_role'));
+        if (!in_array($expectedRole, array('USER', 'RESELLER'), true)) { $expectedRole = 'USER'; }
         foreach ((isset($result['data']) && is_array($result['data']) ? $result['data'] : array()) as $account) {
             if (($id !== '' && (string) (isset($account['id']) ? $account['id'] : '') === $id)
                 || ($username !== '' && strcasecmp(isset($account['username']) ? $account['username'] : '', $username) === 0)) {
-                if (!isset($account['role']) || strtoupper($account['role']) === 'USER') { return $account; }
+                $accountRole = isset($account['role']) ? strtoupper((string) $account['role']) : 'USER';
+                if ($accountRole === $expectedRole && in_array($accountRole, array('USER', 'RESELLER'), true)) { return $account; }
             }
         }
         return null;
@@ -617,7 +717,7 @@ class Panelica_Module extends ServerModule
         return null;
     }
 
-    private function getPlans()
+    public function getPlans()
     {
         $response = $this->api->listPlans();
         return $this->normalizePlans($response);
