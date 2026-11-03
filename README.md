@@ -4,14 +4,14 @@ This repository contains the Panelica hosting server module for WISECP 3. It aut
 
 ## Install
 
-Copy `coremio/modules/Servers/Panelica` into the same path in your WISECP installation. The installed directory must be named `Panelica`.
+Copy the repository's `Panelica` folder into `coremio/modules/Servers/Panelica` in your WISECP installation.
 
 When adding a server in WISECP, enter:
 
 - **Username:** the matching Panelica Root or Reseller username
 - **Password:** leave blank; the module does not use password authentication
 - **API_KEY:** the API key belonging to that Root or Reseller
-- **API_SECRET:** that key's matching API secret
+- **Access Hash (API_SECRET):** that key's matching API secret
 - **SSL:** enable certificate verification for a trusted HTTPS certificate
 - **Port:** `8443` by default
 
