@@ -10,12 +10,11 @@ When adding a server in WISECP, enter:
 
 - **Username:** the matching Panelica Root or Reseller username
 - **Password:** leave blank; the module does not use password authentication
-- **API_KEY:** the API key belonging to that Root or Reseller
-- **Access Hash (API_SECRET):** that key's matching API secret
+- **Access Hash:** enter the two matching API credentials in this format: `API_KEY:API_SECRET` (for example, `pk_live_xxxxx:sk_live_yyyyy`)
 - **SSL:** enable certificate verification for a trusted HTTPS certificate
 - **Port:** `8443` by default
 
-The API key's owner and permissions determine the API access. Use a key with the scopes required for account and hosting provisioning. The module signs requests with HMAC-SHA256 and never sends the API secret over the network.
+Use the API key and secret belonging to the Root or Reseller username. The API key's permissions determine API access. Use a key with the scopes required for account and hosting provisioning. The module signs requests with HMAC-SHA256 and never sends the API secret over the network.
 
 SSL certificate verification is enabled by default. The WISECP server's SSL verification setting is checked when testing the connection and is applied to all API requests. Only disable verification for a trusted panel with a self-signed certificate.
 
