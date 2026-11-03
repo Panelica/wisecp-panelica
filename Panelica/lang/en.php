@@ -34,6 +34,8 @@ return array(
     'module_name' => 'Panelica Hosting',
     'plan_name' => 'Panelica Hosting Plan',
     'plan_description' => 'Select the hosting package to use on the Panelica server.',
+    'ssl_auto_issue' => 'Issue SSL certificate automatically',
+    'ssl_auto_issue_description' => 'When enabled, issue an SSL certificate for new hosting domains. Turning this off does not remove an existing certificate.',
     'plan_list_empty' => 'The Panelica plan list is empty. Check that the API key has the plans:read permission and that a hosting package exists in Panelica.',
     'plan_list_unavailable' => 'Unable to load the plan list — check the module logs.',
     'plan_saved_unverified' => '%s (saved selection; not verified on the server)',
