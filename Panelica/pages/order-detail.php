@@ -1,47 +1,14 @@
 <?php
-    $LANG           = $module->lang;
-    $order          = isset($order) && $order ? $order : [];
-    $options        = isset($order["options"]) ? $order["options"] : [];
-    $config         = isset($options["config"]) ? $options["config"] : [];
-    $creation_info  = isset($options["creation_info"]) ? $options["creation_info"] : [];
-    $selected_plan  = isset($creation_info["plan"]) ? $creation_info["plan"] : 'Default';
-    $websitesLimit  = isset($creation_info["websitesLimit"]) ? $creation_info["websitesLimit"] : 1;
-    $acl            = isset($creation_info["acl"]) ? $creation_info["acl"] : 'user';
+$config = isset($options['config']) && is_array($options['config']) ? $options['config'] : array();
+$domain = isset($options['domain']) ? (string) $options['domain'] : '';
+$accountId = isset($config['panelica_account_id']) ? (string) $config['panelica_account_id'] : '';
+$plan = isset($config['plan']) ? (string) $config['plan'] : '';
+$h = static function ($value) { return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8'); };
 ?>
-
-<div class="formcon">
-    <div class="yuzde30"><?php echo __("admin/orders/hosting-config-username"); ?></div>
-    <div class="yuzde70">
-        <input name="config[user]" type="text" value="<?php echo isset($config["user"]) ? $config["user"] : ''; ?>">
-        <span class="kinfo"><?php echo __("admin/orders/hosting-config-username-info"); ?></span>
-    </div>
-</div>
-
-<div class="formcon">
-    <div class="yuzde30"><?php echo __("admin/orders/hosting-config-password"); ?></div>
-    <div class="yuzde70">
-        <input name="config[password]" type="text" placeholder="*******" value="<?php echo isset($config["password"]) ? Crypt::decode($config["password"],Config::get("crypt/user")) : ''; ?>">
-        <span class="kinfo"><?php echo __("admin/orders/hosting-config-password-info"); ?></span>
-    </div>
-</div>
-
-<div class="formcon">
-    <div class="yuzde30"><?php echo $LANG["plan-name"]; ?></div>
-    <div class="yuzde70">
-        <input type="text" name="creation_info[plan]" value="<?php echo $selected_plan; ?>" placeholder="Default">
-    </div>
-</div>
-
-<div class="formcon">
-    <div class="yuzde30">Website Limit</div>
-    <div class="yuzde70">
-        <input type="text" name="creation_info[websitesLimit]" value="<?php echo $websitesLimit; ?>" placeholder="1">
-    </div>
-</div>
-
-<div class="formcon">
-    <div class="yuzde30">ACL</div>
-    <div class="yuzde70">
-        <input type="text" name="creation_info[acl]" value="<?php echo $acl; ?>" placeholder="1">
-    </div>
-</div>
+<table width="100%" border="0" cellpadding="3" cellspacing="0">
+    <tr><td style="width:30%;padding:8px;border-bottom:1px solid #eee;"><strong>Otomasyon modülü</strong></td><td style="padding:8px;border-bottom:1px solid #eee;">Panelica</td></tr>
+    <?php if ($domain !== ''): ?><tr><td style="width:30%;padding:8px;border-bottom:1px solid #eee;"><strong>Alan adı</strong></td><td style="padding:8px;border-bottom:1px solid #eee;"><?php echo $h($domain); ?></td></tr><?php endif; ?>
+    <?php if ($plan !== ''): ?><tr><td style="width:30%;padding:8px;border-bottom:1px solid #eee;"><strong>Panelica planı</strong></td><td style="padding:8px;border-bottom:1px solid #eee;"><?php echo $h($plan); ?></td></tr><?php endif; ?>
+    <?php if ($accountId !== ''): ?><tr><td style="width:30%;padding:8px;border-bottom:1px solid #eee;"><strong>Panelica hesap numarası</strong></td><td style="padding:8px;border-bottom:1px solid #eee;"><?php echo $h($accountId); ?></td></tr><?php endif; ?>
+    <tr><td colspan="2" style="padding:8px;color:#666;">Hesap parolası ve API kimlik bilgileri bu sipariş görünümünde gösterilmez.</td></tr>
+</table>
