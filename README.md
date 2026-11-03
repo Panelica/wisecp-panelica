@@ -16,7 +16,7 @@ When adding a server in WISECP, enter:
 
 Use the API key and secret belonging to the Root or Reseller username. The API key's permissions determine API access. Use a key with the scopes required for account and hosting provisioning. The module signs requests with HMAC-SHA256 and never sends the API secret over the network.
 
-SSL certificate verification is enabled by default. The WISECP server's SSL verification setting is checked when testing the connection and is applied to all API requests. Only disable verification for a trusted panel with a self-signed certificate.
+For the current server configuration, `panelica-verify-tls` is set to `false` because the certificate does not match the configured IP address. API traffic still uses HTTPS, but certificate and hostname verification are disabled for the connection test and all API requests. Set this to `true` after installing a trusted certificate matching the panel hostname.
 
 ## Features
 
