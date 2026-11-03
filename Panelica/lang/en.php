@@ -37,7 +37,7 @@ return array(
     'plan_list_empty' => 'The Panelica plan list is empty. Check that the API key has the plans:read permission and that a hosting package exists in Panelica.',
     'plan_list_unavailable' => 'Unable to load the plan list — check the module logs.',
     'plan_saved_unverified' => '%s (saved selection; not verified on the server)',
-    'connection_credentials_required' => 'Enter the Root or Reseller username and the matching API_KEY and API_SECRET. The password field is not used.',
+    'connection_credentials_required' => 'Enter the Root or Reseller username, API_KEY, and API_SECRET in the Access Hash field. The password field is not used.',
     'connection_unexpected_response' => 'The Panelica API returned an unexpected response.',
     'connection_plan_list_empty' => 'Connected to Panelica, but the plan list is empty. Make sure the API key has the plans:read permission and that a hosting package exists in Panelica.',
     'selected_server_credentials_missing' => 'WISECP could not access the selected Panelica server IP/host, API key, or Access Hash while loading product settings. Save the server and reopen the product.',
