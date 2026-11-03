@@ -21,7 +21,7 @@ class Panelica_Module extends ServerModule
         $serverFields = isset($server['fields']) && is_array($server['fields']) ? $server['fields'] : array();
         $key = isset($serverFields['api_key']) ? trim((string) $serverFields['api_key']) : '';
         $username = isset($server['username']) ? trim((string) $server['username']) : '';
-        $secret = isset($serverFields['api_secret']) ? trim((string) $serverFields['api_secret']) : '';
+        $secret = isset($server['access_hash']) ? trim((string) $server['access_hash']) : '';
         $moduleConfig = include __DIR__ . '/config.php';
         $verifyTls = is_array($moduleConfig) && array_key_exists('panelica-verify-tls', $moduleConfig)
             ? (bool) $moduleConfig['panelica-verify-tls']
@@ -40,7 +40,7 @@ class Panelica_Module extends ServerModule
     public function testConnect()
     {
         if (!$this->apiReady) {
-            $this->error = 'Panelica bağlantısı için kullanıcı adı (Root/Reseller), API_KEY ve API_SECRET alanlarını doldurun. Parola alanı kullanılmaz.';
+            $this->error = 'Panelica bağlantısı için Root/Reseller kullanıcı adını, API_KEY alanını ve API_SECRET değerini Access Hash alanına girin. Parola alanı kullanılmaz.';
             return false;
         }
         try {
