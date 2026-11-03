@@ -34,6 +34,8 @@ return array(
     'module_name' => 'Panelica Hosting',
     'plan_name' => 'Panelica Hosting Planı',
     'plan_description' => 'Panelica sunucusunda kullanılacak hosting paketini seçin.',
+    'ssl_auto_issue' => 'Otomatik SSL sertifikası oluştur',
+    'ssl_auto_issue_description' => 'Açıkken yeni hosting alan adı için SSL sertifikası alınır. Kapalı yapmak mevcut sertifikayı silmez.',
     'plan_list_empty' => 'Panelica plan listesi boş. API anahtarının plans:read yetkisini ve Panelica üzerinde hosting paketi bulunduğunu kontrol edin.',
     'plan_list_unavailable' => 'Plan listesi yüklenemedi — modül kayıtlarını kontrol edin',
     'plan_saved_unverified' => '%s (kayıtlı seçim; sunucuda doğrulanamadı)',
