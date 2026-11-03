@@ -522,7 +522,10 @@ class Panelica_Module extends ServerModule
             $account = $this->findAccount();
             if (!$account) { throw new Exception('Panelica hesabı bulunamadı.'); }
             $this->api->changeAccountPassword($account['id'], $password);
-            $this->setSaved('password', $this->encode_str($password));
+            $encodedPassword = $this->encode_str($password);
+            $this->setSaved('password', $encodedPassword);
+            if (!isset($this->options['login']) || !is_array($this->options['login'])) { $this->options['login'] = array(); }
+            $this->options['login']['password'] = $encodedPassword;
             $this->persistOptions();
             echo Utility::jencode(array('status' => 'successful', 'message' => 'Şifre güncellendi.'));
             return true;
