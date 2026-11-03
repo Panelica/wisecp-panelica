@@ -1,27 +1,26 @@
-# Panelica module for WISECP 3.1.9.8.2
+# Panelica module for WISECP 3
 
-This is a separate WISECP V3 server module. It uses the legacy V3 module contract and is not the WISECP V5 project in the parent directory.
+This repository contains the Panelica hosting server module for WISECP 3. It authenticates with Panelica's HMAC-signed External API and keeps API credentials encrypted in WISECP's server record.
 
 ## Install
 
-Copy `coremio/modules/Servers/Panelica` into the matching `coremio/modules/Servers/` directory of your WISECP installation. The final module directory must be named `Panelica` and contain `Panelica.php`, `config.php`, and `lib/PanelicaAPI.php`.
+Copy `coremio/modules/Servers/Panelica` into the same path in your WISECP installation. The installed directory must be named `Panelica`.
 
-In WISECP, add a server with:
+When adding a server in WISECP, enter:
 
-- **Hostname/IP:** Panelica server host name or IP
-- **Port:** `8443`
-- **Password:** Panelica External API key
-- **Access Hash:** Panelica External API secret
-- **Secure connection:** enabled
+- **Username:** the matching Panelica Root or Reseller username
+- **Password:** leave blank; the module does not use password authentication
+- **API_KEY:** the API key belonging to that Root or Reseller
+- **API_SECRET:** that key's matching API secret
+- **SSL:** enable certificate verification for a trusted HTTPS certificate
+- **Port:** `8443` by default
 
-Create the Panelica API key with the scopes needed for account and hosting provisioning: `accounts:read`, `accounts:write`, `accounts:delete`, `domains:write`, `plans:read`, and `bandwidth:read`. The API endpoint must be reachable over HTTPS. To match the supplied Panelica PHP SDK and support the self-signed certificate shown in your setup, `config.php` defaults `panelica-verify-tls` to `false`.
+The API key's owner and permissions determine the API access. Use a key with the scopes required for account and hosting provisioning. The module signs requests with HMAC-SHA256 and never sends the API secret over the network.
 
-This setting disables certificate and hostname verification for module API requests. Use it only when you trust the Panelica server; installing a publicly trusted certificate and setting the option to `true` is the recommended production setup.
+SSL certificate verification is enabled by default. The WISECP server's SSL verification setting is checked when testing the connection and is applied to all API requests. Only disable verification for a trusted panel with a self-signed certificate.
 
-When configuring a WISECP product, select the Panelica hosting plan returned by the server. The module provisions a Panelica account and attaches the product's domain. It supports suspend, unsuspend, terminate, package upgrades/downgrades, client/admin SSO, and client password changes.
+## Features
 
-## Compatibility and validation
+The module loads hosting plans, provisions accounts and domains, and supports suspend, unsuspend, terminate, plan changes, single sign-on, and client password changes.
 
-The module follows the archived WISECP V3 sample server module's global `Panelica_Module extends ServerModule` structure and V3 callbacks such as `testConnect()`, `config_options()`, `create()`, and `apply_updowngrade()`.
-
-This source was prepared for WISECP 3.1.9.8.2. A live WISECP installation and Panelica server were not available in this workspace, so end-to-end provisioning and PHP runtime validation must be completed in a staging installation before production use.
+Live connection and lifecycle tests require a WISECP installation and a Panelica server; those were not available in this workspace.
