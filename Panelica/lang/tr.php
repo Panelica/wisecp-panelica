@@ -37,7 +37,7 @@ return array(
     'plan_list_empty' => 'Panelica plan listesi boş. API anahtarının plans:read yetkisini ve Panelica üzerinde hosting paketi bulunduğunu kontrol edin.',
     'plan_list_unavailable' => 'Plan listesi yüklenemedi — modül kayıtlarını kontrol edin',
     'plan_saved_unverified' => '%s (kayıtlı seçim; sunucuda doğrulanamadı)',
-    'connection_credentials_required' => 'Panelica bağlantısı için Root veya Reseller kullanıcı adını ve ona ait API_KEY ile API_SECRET değerlerini girin. Parola alanı kullanılmaz.',
+    'connection_credentials_required' => 'Panelica bağlantısı için Root veya Reseller kullanıcı adını, API_KEY değerini ve API_SECRET değerini Access Hash alanına girin. Parola alanı kullanılmaz.',
     'connection_unexpected_response' => 'Panelica API beklenmeyen bir yanıt verdi.',
     'connection_plan_list_empty' => 'Panelica bağlantısı kuruldu ancak plan listesi boş. API anahtarında plans:read yetkisi olduğundan ve Panelica üzerinde hosting paketi bulunduğundan emin olun.',
     'selected_server_credentials_missing' => 'WISECP ürün ayarları yüklenirken seçilen Panelica sunucusunun IP/host, API key veya Access Hash bilgisi modüle ulaşmadı. Sunucu kaydını kaydedip ürünü yeniden açın.',
