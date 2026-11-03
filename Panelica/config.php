@@ -1,7 +1,7 @@
 <?php
 return array(
     'type' => 'hosting',
-    'access-hash' => false,
+    'access-hash' => true,
     // TLS certificate verification is enabled by default. WISECP's per-server SSL
     // verification setting overrides this value in define_server_info().
     'panelica-verify-tls' => true,
@@ -11,7 +11,6 @@ return array(
     'server-info-secure-port' => 8443,
     'fields' => array(
         'api_key' => array('type' => 'password', 'name' => 'API_KEY', 'crypt' => true),
-        'api_secret' => array('type' => 'password', 'name' => 'API_SECRET', 'crypt' => true),
     ),
     'configurable-option-params' => array(),
 );
