@@ -210,11 +210,12 @@ if (!class_exists('PanelicaAPI')) {
          * Find one account by exact username (case-insensitive).
          * Returns the account array or null when not found.
          */
-        public function findAccountByUsername($username)
+        public function findAccountByUsername($username, $expectedRole = 'USER')
         {
             $resp = $this->listAccounts();
             $accounts = isset($resp['data']) && is_array($resp['data']) ? $resp['data'] : array();
             $needle = strtolower(trim((string) $username));
+            $expectedRole = strtoupper(trim((string) $expectedRole));
             foreach ($accounts as $account) {
                 if (!isset($account['username']) || strtolower($account['username']) !== $needle) {
                     continue;
@@ -227,7 +228,8 @@ if (!class_exists('PanelicaAPI')) {
                 // password and terminate would all act on them. A listing that
                 // carries no role at all is an older panel, and is taken at
                 // face value so nothing that works today stops working.
-                if (isset($account['role']) && strtoupper((string) $account['role']) !== 'USER') {
+                $accountRole = isset($account['role']) ? strtoupper((string) $account['role']) : 'USER';
+                if ($accountRole !== $expectedRole || !in_array($accountRole, array('USER', 'RESELLER'), true)) {
                     continue;
                 }
 
@@ -237,7 +239,7 @@ if (!class_exists('PanelicaAPI')) {
         }
 
         /** POST /v1/accounts */
-        public function createAccount($username, $password, $email, $fullName, $planId)
+        public function createAccount($username, $password, $email, $fullName, $planId, $role = 'USER')
         {
             return $this->request('POST', '/v1/accounts', array(
                 'username'  => $username,
@@ -245,6 +247,7 @@ if (!class_exists('PanelicaAPI')) {
                 'email'     => $email,
                 'full_name' => $fullName,
                 'plan_id'   => $planId,
+                'role'      => strtoupper((string) $role) === 'RESELLER' ? 'RESELLER' : 'USER',
             ));
         }
 
@@ -968,4 +971,5 @@ if (!class_exists('PanelicaAPI')) {
         }
     }
 }
+
 
