@@ -32,6 +32,22 @@ $plan = $value($values, array('plan', 'plan_name', 'plan_id', 'panelica_plan'));
 $accountId = $value($values, array('panelica_account_id'));
 $username = $value($values, array('user', 'username'));
 if ($username === '') { $username = $value($login, array('username')); }
+$usage = isset($usage) && is_array($usage) ? $usage : array();
+$disk = isset($usage['disk']) && is_array($usage['disk']) ? $usage['disk'] : array();
+$bandwidth = isset($usage['bandwidth']) && is_array($usage['bandwidth']) ? $usage['bandwidth'] : array();
+$diskUsed = isset($disk['used_mb']) ? (float) $disk['used_mb'] : (isset($disk['used']) ? (float) $disk['used'] : null);
+$diskTotal = isset($disk['quota_mb']) ? (float) $disk['quota_mb'] : (isset($disk['total_mb']) ? (float) $disk['total_mb'] : null);
+$trafficUsed = isset($bandwidth['bytes_used']) ? (float) $bandwidth['bytes_used'] / 1048576 : (isset($bandwidth['used_mb']) ? (float) $bandwidth['used_mb'] : null);
+$trafficTotal = isset($bandwidth['bytes_total']) ? (float) $bandwidth['bytes_total'] / 1048576 : (isset($bandwidth['total_mb']) ? (float) $bandwidth['total_mb'] : null);
+$usageCards = array();
+foreach (array(
+    array('Disk kullanımı', $diskUsed, $diskTotal),
+    array('Trafik kullanımı', $trafficUsed, $trafficTotal),
+) as $usageRow) {
+    if ($usageRow[1] === null) { continue; }
+    $percent = $usageRow[2] !== null && $usageRow[2] > 0 ? min(100, max(0, ($usageRow[1] / $usageRow[2]) * 100)) : 0;
+    $usageCards[] = array('label' => $usageRow[0], 'used' => $usageRow[1], 'total' => $usageRow[2], 'percent' => $percent);
+}
 
 $hostCandidate = $value($server, array('hostname', 'name', 'ip'));
 $hostCandidate = preg_replace('#^https?://#i', '', $hostCandidate);
@@ -150,6 +166,14 @@ foreach (array('ns1', 'ns2', 'ns3', 'ns4') as $nsKey) {
     .panelica-service__limit { min-width: 0; padding: 14px; border-radius: 12px; background: #f6f8fc; }
     .panelica-service__limit-label { display: block; margin-bottom: 7px; color: var(--pc-muted); font-size: 12px; }
     .panelica-service__limit-value { display: block; color: var(--pc-ink); font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+    .panelica-service__usage { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .panelica-service__usage-card { display: flex; align-items: center; gap: 16px; min-width: 0; padding: 16px; border: 1px solid var(--pc-line); border-radius: 13px; }
+    .panelica-service__ring { --usage: 0%; display: grid; place-items: center; width: 82px; height: 82px; flex: 0 0 82px; border-radius: 50%; background: conic-gradient(var(--pc-blue) var(--usage), #e9eef7 0); }
+    .panelica-service__ring:before { content: ""; grid-area: 1 / 1; width: 64px; height: 64px; border-radius: 50%; background: #fff; }
+    .panelica-service__ring span { z-index: 1; grid-area: 1 / 1; color: var(--pc-ink); font-size: 13px; font-weight: 750; }
+    .panelica-service__usage-details { min-width: 0; }
+    .panelica-service__usage-details strong { display: block; margin-bottom: 5px; color: var(--pc-ink); }
+    .panelica-service__usage-details span { color: var(--pc-muted); font-size: 13px; }
     .panelica-service__dns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .panelica-service__dns-item { padding: 12px 14px; border: 1px solid var(--pc-line); border-radius: 10px; color: var(--pc-ink); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
     .panelica-service__actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; padding: 16px 18px; border-radius: 13px; background: #f3f6ff; }
@@ -201,6 +225,20 @@ foreach (array('ns1', 'ns2', 'ns3', 'ns4') as $nsKey) {
         </div>
     </div>
 
+    <?php if ($usageCards): ?>
+    <section class="panelica-service__section">
+        <div class="panelica-service__section-head"><div><h3 class="panelica-service__section-title">Hosting paketine ait kullanım bilgileri</h3><p class="panelica-service__section-note">Panelica sunucusundan alınan güncel kullanım</p></div></div>
+        <div class="panelica-service__usage">
+            <?php foreach ($usageCards as $card): ?>
+            <div class="panelica-service__usage-card">
+                <div class="panelica-service__ring" style="--usage:<?php echo $h(number_format($card['percent'], 1, '.', '')); ?>%"><span><?php echo $h(number_format($card['percent'], 0)); ?>%</span></div>
+                <div class="panelica-service__usage-details"><strong><?php echo $h($card['label']); ?></strong><span><?php echo $h(number_format($card['used'], 1)); ?> MB kullanıldı<?php if ($card['total'] !== null && $card['total'] > 0): ?> / <?php echo $h(number_format($card['total'], 1)); ?> MB limit<?php else: ?> / Limitsiz<?php endif; ?></span></div>
+            </div>
+            <?php endforeach; ?>
+        </div>
+    </section>
+    <?php endif; ?>
+
     <?php if ($limits): ?>
     <section class="panelica-service__section">
         <div class="panelica-service__section-head">
@@ -245,3 +283,4 @@ foreach (array('ns1', 'ns2', 'ns3', 'ns4') as $nsKey) {
         <?php endif; ?>
     </div>
 </section>
+
