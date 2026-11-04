@@ -5,7 +5,7 @@ namespace WISECP\Modules\Servers;
 
 use RuntimeException;
 
-final class ApiClient
+final class ApiClient implements PanelicaApi
 {
     private string $baseUrl;
     private string $apiKey;
@@ -13,6 +13,9 @@ final class ApiClient
 
     /** @var callable(string,array,array):void */
     private $logger;
+
+    /** The HTTP status of the last answer, so a caller can tell 404 from a real failure. */
+    private int $lastStatus = 0;
 
     public function __construct(array $server, callable $logger)
     {
@@ -93,6 +96,7 @@ final class ApiClient
         $curlError = curl_error($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         curl_close($ch);
+        $this->lastStatus = $status;
 
         if ($raw === false) {
             ($this->logger)($path, $requestForLog, ['transport_error' => $curlError, 'http_status' => $status]);
@@ -119,6 +123,58 @@ final class ApiClient
         }
 
         return $decoded;
+    }
+
+    /**
+     * The payload of a GET, unwrapped: the panel answers {"status":…,"data":…}
+     * and every caller wants the data, be it one object or a list.
+     *
+     * @return array<mixed>
+     */
+    public function get(string $path): array
+    {
+        return $this->payload($this->request('GET', $path));
+    }
+
+    /**
+     * @param array<string,mixed>|null $body
+     * @return array<mixed>
+     */
+    public function post(string $path, ?array $body = null): array
+    {
+        return $this->payload($this->request('POST', $path, $body));
+    }
+
+    /**
+     * @param array<string,mixed> $body
+     * @return array<mixed>
+     */
+    public function patch(string $path, array $body): array
+    {
+        return $this->payload($this->request('PATCH', $path, $body));
+    }
+
+    /** @return array<mixed> */
+    public function delete(string $path): array
+    {
+        return $this->payload($this->request('DELETE', $path));
+    }
+
+    /** Whether the last answer carried this status. */
+    public function lastStatusWas(int $status): bool
+    {
+        return $this->lastStatus === $status;
+    }
+
+    /**
+     * @param array<string,mixed> $value
+     * @return array<mixed>
+     */
+    private function payload(array $value): array
+    {
+        $data = $value['data'] ?? $value;
+
+        return is_array($data) ? $data : [];
     }
 
     /** @return array<int,array<string,mixed>> */

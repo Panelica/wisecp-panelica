@@ -1,791 +1,568 @@
 <?php
+
 declare(strict_types=1);
 
-namespace WISECP\Modules\Servers {
+namespace WISECP\Modules\Servers;
 
-use RuntimeException;
+use Exception;
 use ServerModule;
 
-if (class_exists(\ServerModule::class)) {
+/*
+ * Panelica hosting accounts, driven from WISECP.
+ *
+ * The core calls the verbs below by name; a name it does not know is never
+ * called. The first version of this module carried two generations of names at
+ * once - testConnect() beside test_connect(), terminate() and removeAccount()
+ * beside cancel(), apply_updowngrade() and change_plan() beside upgrade(),
+ * clientArea_home() and client_area_data() beside dashboard_data() - so for
+ * every job one name was read and the other sat unused. That is why the client
+ * area showed nothing and deleting an account in WISECP left it standing on the
+ * panel. There is one generation here, the current one.
+ *
+ * Failure is reported by throwing: WISECP catches it, writes it to the module
+ * log and shows it. Returning false says "done, nothing to do".
+ */
 class Panelica extends ServerModule
 {
-    private ?ApiClient $api = null;
-    private array $serverInfo = [];
+    /** Where the account's id on the panel is kept between calls. */
+    private const ACCOUNT_ID = 'panelica_account_id';
 
-    protected function define_server_info(array $server = []): void
+    protected PanelicaApi $api;
+
+    /**
+     * @param array<string,mixed>|int $server
+     * @param array<string,mixed> $options
+     */
+    public function __construct($server = [], $options = [])
     {
-        $this->serverInfo = $server ?: (array) $this->server;
-        $this->config['Api_key'] = (string) ($this->serverInfo['password'] ?? '');
-        $this->config['Api_secret'] = (string) ($this->serverInfo['access_hash'] ?? '');
+        $this->_name = __CLASS__;
+        parent::__construct($server, $options);
     }
 
-    public function test_connect(): array|bool
+    /**
+     * Called once $this->server is filled and its secrets decoded.
+     *
+     * @param array<string,mixed> $server
+     */
+    protected function define_server_info($server = []): void
     {
-        $response = $this->client()->request('GET', '/v1/me');
-        $data = $this->client()->data($response);
-        return ['status' => 'successful', 'message' => 'Panelica API bağlantısı başarılı.', 'account' => $data['user']['username'] ?? ''];
+        include_once __DIR__ . DIRECTORY_SEPARATOR . 'PanelicaApi.php';
+        include_once __DIR__ . DIRECTORY_SEPARATOR . 'ApiClient.php';
+
+        $this->api = new ApiClient($server, function (string $path, array $request, array $response): void {
+            $this->save_log('api', json_encode(['path' => $path] + $request, JSON_UNESCAPED_UNICODE) ?: '', json_encode($response, JSON_UNESCAPED_UNICODE) ?: '');
+        });
     }
 
-    /** WiseCP 3.1.x uses the camelCase server connection hook. */
-    public function testConnect(): bool
+    /** Which cards and buttons the service page offers. */
+    public function configure_features(): void
     {
-        try {
-            $this->test_connect();
-            return true;
-        } catch (\Throwable $exception) {
-            $this->error = $exception->getMessage();
-            return false;
-        }
+        $this->dashboard_cache = false;
     }
 
-    /** @return array<string,mixed> */
+    public function test_connect(): bool
+    {
+        // /v1/plans needs the key, the secret and the clock to be right, and it
+        // reads nothing: a failed signature answers 401 and throws.
+        $this->api->get('/v1/plans');
+
+        return true;
+    }
+
+    /**
+     * The product form: which Panelica plan a package hands out.
+     *
+     * @param array<string,mixed> $data
+     * @return array<string,array<string,mixed>>
+     */
     public function product_configuration(array $data = []): array
     {
-        $plans = [];
-        foreach ($this->client()->listPlans() as $plan) {
-            $name = trim((string) ($plan['name'] ?? ''));
-            if ($name !== '') {
-                $plans[$name] = $name;
-            }
+        try {
+            $plans = $this->planChoices();
+            $unavailable = null;
+        } catch (Exception $e) {
+            $plans = null;
+            $unavailable = $this->text('plans_unavailable', ['error' => $e->getMessage()]);
         }
-        if ($plans === []) {
-            throw new RuntimeException('Panelica sunucusunda kullanılabilir hosting planı bulunamadı.');
-        }
+
+        $plan = $plans === null
+            ? ['name' => $this->text('setting_plan'), 'description' => $unavailable, 'type' => 'text', 'value' => (string) ($data['plan_id'] ?? ''), 'wrap_width' => 'col-lg-6']
+            : ['name' => $this->text('setting_plan'), 'description' => $this->text('setting_plan_description'), 'type' => 'dropdown', 'options' => $plans, 'value' => (string) ($data['plan_id'] ?? ''), 'wrap_width' => 'col-lg-6'];
+
         return [
-            'plan' => [
-                'type' => 'select',
-                'name' => 'Panelica Hosting Planı',
-                'options' => $plans,
-                'value' => (string) ($data['plan'] ?? ''),
-                'required' => true,
+            'plan_id' => $plan,
+            'account_role' => [
+                'name' => $this->text('setting_role'),
+                'description' => $this->text('setting_role_description'),
+                'type' => 'dropdown',
+                'options' => ['USER' => $this->text('role_user'), 'RESELLER' => $this->text('role_reseller')],
+                'value' => (string) ($data['account_role'] ?? 'USER'),
+                'wrap_width' => 'col-lg-6',
             ],
         ];
     }
 
-    public function create(): array|bool
+    /**
+     * @param array<string,mixed> $data
+     * @return array<string,mixed>
+     */
+    public function save_product_configuration(array $data = []): array
+    {
+        // The plan is what every later call reads, so a package without one is
+        // refused here rather than at the customer's first order.
+        if (trim((string) ($data['plan_id'] ?? '')) === '') {
+            throw new Exception($this->text('plan_required'));
+        }
+
+        $role = strtoupper(trim((string) ($data['account_role'] ?? 'USER')));
+
+        return ['plan_id' => trim((string) $data['plan_id']), 'account_role' => in_array($role, ['USER', 'RESELLER'], true) ? $role : 'USER'];
+    }
+
+    /**
+     * Open the account. What is returned is written onto the service.
+     *
+     * @return array<string,mixed>
+     */
+    public function create(): array
     {
         $domain = $this->domain();
-        $email = filter_var((string) ($this->user['email'] ?? ''), FILTER_VALIDATE_EMAIL);
-        if (!is_string($email)) {
-            throw new RuntimeException('Hesap oluşturmak için geçerli bir müşteri e-posta adresi gerekli.');
+        $username = $this->username($domain);
+        $password = $this->password();
+
+        $existing = $this->findAccount($username);
+        if ($existing !== null) {
+            // A retry after a half-finished order: the account is there, so the
+            // service is given what it needs instead of a duplicate failing.
+            return $this->created((string) $existing['id'], $username, $password, $domain);
         }
 
-        $creation = (array) ($this->options['creation_info'] ?? []);
-        $planName = trim((string) ($creation['plan'] ?? ''));
-        $plan = $this->findPlan($planName);
-        $username = trim((string) ($this->options['config']['user'] ?? ''));
-        if ($username === '') {
-            $username = (string) self::username_generator($domain);
-        }
-        if (!preg_match('/^[a-zA-Z][a-zA-Z0-9_-]{1,31}$/', $username)) {
-            throw new RuntimeException('Panelica için oluşturulan kullanıcı adı geçersiz.');
+        $account = $this->api->post('/v1/accounts', [
+            'username' => $username,
+            'email' => $this->email(),
+            'password' => $password,
+            'full_name' => $this->fullName(),
+            'role' => $this->role(),
+            'plan_id' => $this->planId(),
+            'auto_username' => true,
+        ]);
+
+        $id = (string) ($account['id'] ?? '');
+        if ($id === '') {
+            throw new Exception($this->text('no_account_returned'));
         }
 
-        $storedPassword = !empty($this->options['config']['password']);
-        $password = '';
-        if ($storedPassword) {
-            $password = (string) $this->decode_str((string) $this->options['config']['password']);
-        }
-        if (!$storedPassword) {
-            $password = \Utility::generate_hash(20);
+        // auto_username: the panel may have made the name readable and free.
+        $username = (string) ($account['username'] ?? $username);
+
+        if ($domain !== '') {
+            $this->api->post('/v1/domains', ['user_id' => $id, 'domain_name' => $domain]);
         }
 
-        $account = $this->findAccountByUsername($username);
-        $createdNewAccount = false;
-        if ($account !== null && !$storedPassword) {
-            throw new RuntimeException('Panelica hesabı mevcut ancak kayıtlı hizmet parolası yok; güvenli yeniden oluşturma yapılamadı.');
-        }
-        if ($account !== null && strcasecmp((string) ($account['email'] ?? ''), $email) !== 0) {
-            throw new RuntimeException('Panelica kullanıcı adı başka bir e-posta adresine ait; hesap güvenliği için işlem durduruldu.');
-        }
-        if ($account === null) {
-            $this->options['config']['user'] = $username;
-            $this->options['config']['password'] = $this->encode_str($password);
-            $this->save_options();
-            $fullName = trim((string) ($this->user['full_name'] ?? ''));
-            $created = $this->client()->request('POST', '/v1/accounts', [
-                'username' => $username,
-                'email' => $email,
-                'password' => $password,
-                'full_name' => $fullName,
-                'role' => 'USER',
-                'plan_id' => (string) ($plan['id'] ?? ''),
-            ]);
-            $account = $this->client()->data($created);
-            if (empty($account['id'])) {
-                $account = $this->findAccountByUsername($username);
-            }
-            $createdNewAccount = is_array($account) && !empty($account['id']);
-        }
-        if (!is_array($account) || empty($account['id'])) {
-            throw new RuntimeException('Panelica hesabı oluşturdu ancak hesap kimliği yanıtlanmadı.');
-        }
-
-        try {
-            $domainId = $this->ensureDomain($domain, (string) $account['id']);
-        } catch (\Throwable $exception) {
-            if ($createdNewAccount) {
-                try {
-                    $this->client()->request('DELETE', '/v1/accounts/' . rawurlencode((string) $account['id']));
-                } catch (\Throwable) {
-                    throw new RuntimeException('Alan adı oluşturulamadı ve yeni Panelica hesabı otomatik temizlenemedi. Panelica panelinden hesabı kontrol edin.', 0, $exception);
-                }
-            }
-            throw $exception;
-        }
-
-        return [
-            'config' => [
-                'user' => $username,
-                'password' => $this->encode_str($password),
-                'panelica_account_id' => (string) $account['id'],
-                'panelica_domain_id' => $domainId,
-                'plan' => $planName,
-            ],
-            'ip' => (string) ($this->server['ip'] ?? ''),
-            'hostname' => (string) ($this->server['hostname'] ?? $this->server['ip'] ?? ''),
-        ];
+        return $this->created($id, $username, $password, $domain);
     }
 
     public function suspend(): bool
     {
-        $this->accountAction('suspend');
+        $this->api->post('/v1/accounts/' . $this->accountId() . '/suspend', ['reason' => trim((string) ($this->service['suspended_reason'] ?? '')) ?: 'Suspended from WISECP']);
+
         return true;
     }
 
     public function unsuspend(): bool
     {
-        $this->accountAction('unsuspend');
+        $this->api->post('/v1/accounts/' . $this->accountId() . '/unsuspend');
+
         return true;
     }
 
+    /**
+     * Delete the account on the panel.
+     *
+     * The first version never reached the panel: WISECP calls cancel(), and the
+     * delete lived in removeAccount()/terminate(), which nothing calls. An
+     * account already gone counts as done, so a repeated cancellation does not
+     * leave the service stuck.
+     */
     public function cancel(): bool
     {
-        $id = trim((string) ($this->options['config']['panelica_account_id'] ?? ''));
+        $id = $this->accountId(required: false);
+
         if ($id === '') {
-            $account = $this->findAccountByUsername((string) ($this->options['config']['user'] ?? ''));
-            if ($account === null) {
-                return true;
+            return true;
+        }
+
+        try {
+            $this->api->delete('/v1/accounts/' . $id);
+        } catch (Exception $e) {
+            if (! $this->api->lastStatusWas(404)) {
+                throw $e;
             }
-            $id = (string) ($account['id'] ?? '');
-        } elseif (!$this->accountExistsById($id)) {
-            return true;
         }
-        if ($id === '') {
-            return true;
-        }
-        $this->client()->request('DELETE', '/v1/accounts/' . rawurlencode($id));
+
         return true;
     }
 
-    public function terminate(): bool
+    public function change_password(string $password = ''): bool
     {
-        return $this->cancel();
+        $password = trim($password);
+        if ($password === '') {
+            throw new Exception($this->text('password_required'));
+        }
+
+        $this->api->post('/v1/accounts/' . $this->accountId() . '/change-password', ['password' => $password]);
+        $this->save_login_password($password);
+
+        return true;
     }
 
+    /**
+     * Move the account to the plan of the package it was moved to.
+     *
+     * @param array<string,mixed> $new_product
+     */
     public function upgrade(array $new_product = []): bool
     {
-        $newOptions = (array) ($new_product['module_data'] ?? $new_product['creation_info'] ?? []);
-        if (isset($newOptions['Panelica']) && is_array($newOptions['Panelica'])) {
-            $newOptions = $newOptions['Panelica'];
+        $module = is_array($new_product['module_data'] ?? null) ? $new_product['module_data'] : [];
+        $plan = trim((string) ($module['plan_id'] ?? ''));
+
+        if ($plan === '') {
+            // Nothing to move to: the new package has no Panelica plan, which
+            // is a configuration mistake and not something to do quietly.
+            throw new Exception($this->text('plan_required'));
         }
-        $planName = trim((string) ($newOptions['plan'] ?? $this->options['creation_info']['plan'] ?? ''));
-        $plan = $this->findPlan($planName);
-        $this->client()->request('PATCH', '/v1/accounts/' . rawurlencode($this->accountId()), [
-            'plan_id' => (string) ($plan['id'] ?? ''),
-        ]);
-        $this->options['creation_info']['plan'] = $planName;
-        $this->options['config']['plan'] = $planName;
-        $this->save_options();
+
+        $this->api->patch('/v1/accounts/' . $this->accountId(), ['plan_id' => $plan]);
+
         return true;
     }
 
-    public function change_password(string $password): bool
-    {
-        if (strlen($password) < 8 || strlen($password) > 255) {
-            throw new RuntimeException('Parola 8 ile 255 karakter arasında olmalıdır.');
-        }
-        $this->client()->request('POST', '/v1/accounts/' . rawurlencode($this->accountId()) . '/change-password', [
-            'new_password' => $password,
-        ]);
-        $this->options['config']['password'] = $this->encode_str($password);
-        $this->save_options();
-        return true;
-    }
-
-    /** @return array<string,mixed> */
+    /**
+     * What the customer sees on the service page.
+     *
+     * @return array<string,mixed>
+     */
     public function dashboard_data(): array
     {
-        $accountId = $this->accountId();
-        $diskResponse = $this->client()->request('GET', '/v1/accounts/' . rawurlencode($accountId) . '/disk-usage');
-        $statsResponse = $this->client()->request('GET', '/v1/accounts/' . rawurlencode($accountId) . '/stats');
-        $bandwidthResponse = $this->client()->request('GET', '/v1/bandwidth/accounts/' . rawurlencode($accountId));
+        $account = $this->api->get('/v1/accounts/' . $this->accountId());
+        $usage = $this->usage();
+        $host = $this->panelHost();
 
         return [
-            'domain' => $this->domain(),
-            'username' => (string) ($this->options['config']['user'] ?? ''),
-            'plan' => (string) ($this->options['config']['plan'] ?? ''),
-            'disk' => $this->client()->data($diskResponse),
-            'stats' => $this->client()->data($statsResponse),
-            'bandwidth' => $this->client()->data($bandwidthResponse),
-            'panel_url' => $this->panelUrl(),
-            'webmail_url' => $this->webmailUrl(),
+            'gauges' => array_filter([
+                'disk' => $usage['disk'] ?? null,
+                'bandwidth' => $usage['bandwidth'] ?? null,
+            ]),
+            'server_info' => array_filter([
+                'domain' => $this->item($this->domain(), copyable: true),
+                'username' => $this->item((string) ($account['username'] ?? ''), copyable: true),
+                'status' => $this->statusItem((string) ($account['status'] ?? 'active')),
+                'plan' => $this->item((string) ($account['plan']['name'] ?? $account['plan_name'] ?? '')),
+                'panel' => $this->item($host === '' ? '' : 'https://' . $host . ':' . $this->panelPort(), link: true),
+                'nameservers' => $this->item($this->nameservers()),
+            ]),
         ];
     }
 
-    public function page_dashboard(): string
+    /**
+     * Disk and traffic for the usage cron and the gauges.
+     *
+     * @return array<string,float|int>
+     */
+    public function metrics_usage(): array
     {
-        return $this->get_page('dashboard', ['data' => $this->dashboard_data()]);
+        $usage = $this->usage();
+
+        return array_filter([
+            'disk' => $usage['disk']['used'] ?? null,
+            'bandwidth' => $usage['bandwidth']['used'] ?? null,
+        ], static fn ($value): bool => $value !== null);
     }
 
-    private function accountAction(string $action): void
-    {
-        $id = $this->accountId();
-        $account = $this->client()->data($this->client()->request('GET', '/v1/accounts/' . rawurlencode($id)));
-        $desired = $action === 'suspend' ? 'suspended' : 'active';
-        if (strcasecmp((string) ($account['status'] ?? ''), $desired) === 0) {
-            return;
-        }
-        $this->client()->request('POST', '/v1/accounts/' . rawurlencode($id) . '/' . $action, []);
-    }
+    // ---------------------------------------------------------------- helpers
 
-    private function accountExistsById(string $id): bool
+    /**
+     * The account's id on the panel, kept on the service options by create().
+     */
+    private function accountId(bool $required = true): string
     {
-        for ($page = 1; $page <= 100; $page++) {
-            $accounts = $this->client()->listAccounts($page, 100);
-            foreach ($accounts as $account) {
-                if ((string) ($account['id'] ?? '') === $id) {
-                    return true;
-                }
-            }
-            if (count($accounts) < 100) {
-                return false;
-            }
-        }
-        throw new RuntimeException('Panelica hesap listesi güvenli biçimde doğrulanamadı.');
-    }
+        $id = trim((string) ($this->options[self::ACCOUNT_ID] ?? ''));
 
-    private function accountId(): string
-    {
-        $id = trim((string) ($this->options['config']['panelica_account_id'] ?? ''));
-        if ($id !== '') {
-            return $id;
+        if ($id === '' && $required) {
+            throw new Exception($this->text('no_account_id'));
         }
-        $account = $this->findAccountByUsername((string) ($this->options['config']['user'] ?? ''));
-        if ($account === null || empty($account['id'])) {
-            throw new RuntimeException('Panelica hesabı bulunamadı; işlem uygulanamadı.');
-        }
-        $id = (string) $account['id'];
-        $this->options['config']['panelica_account_id'] = $id;
-        $this->save_options();
+
         return $id;
     }
 
-    /** @return array<string,mixed>|null */
-    private function findAccountByUsername(string $username): ?array
+    /**
+     * @return array<string,mixed>
+     */
+    private function created(string $id, string $username, string $password, string $domain): array
     {
-        for ($page = 1; $page <= 100; $page++) {
-            $accounts = $this->client()->listAccounts($page, 100);
-            foreach ($accounts as $account) {
-                if (strcasecmp((string) ($account['username'] ?? ''), $username) === 0
-                    && (!isset($account['role']) || strtoupper((string) $account['role']) === 'USER')) {
-                    return $account;
-                }
-            }
-            if (count($accounts) < 100) {
-                break;
+        $this->options[self::ACCOUNT_ID] = $id;
+        $this->save_options();
+        $this->save_login_password($password);
+
+        $host = $this->panelHost();
+
+        return [
+            'username' => $username,
+            'password' => $password,
+            self::ACCOUNT_ID => $id,
+            'ftp_info' => [
+                'ip' => (string) ($this->server['ip'] ?? ''),
+                'host' => $host !== '' ? $host : (string) ($this->server['ip'] ?? ''),
+                'username' => $username,
+                'password' => $password,
+                'port' => 21,
+            ],
+            'domain' => $domain,
+        ];
+    }
+
+    /** @return array<string,mixed>|null */
+    private function findAccount(string $username): ?array
+    {
+        if ($username === '') {
+            return null;
+        }
+
+        try {
+            $accounts = $this->api->get('/v1/accounts');
+        } catch (Exception) {
+            return null;    // the list is a convenience; a failure must not stop an order
+        }
+
+        foreach (is_array($accounts) ? $accounts : [] as $account) {
+            if (is_array($account) && strcasecmp((string) ($account['username'] ?? ''), $username) === 0) {
+                return $account;
             }
         }
+
         return null;
     }
 
-    /** @return array<string,mixed> */
-    private function findPlan(string $name): array
+    /**
+     * @return array<string,array<string,mixed>>
+     */
+    private function usage(): array
     {
-        if ($name === '') {
-            throw new RuntimeException('Ürün ayarlarında Panelica hosting planı seçilmelidir.');
+        $id = $this->accountId(required: false);
+        if ($id === '') {
+            return [];
         }
-        foreach ($this->client()->listPlans() as $plan) {
-            if (strcasecmp(trim((string) ($plan['name'] ?? '')), $name) === 0 && !empty($plan['id'])) {
-                return $plan;
+
+        $out = [];
+
+        try {
+            $quota = $this->api->get('/v1/resource-quota/users/' . $id);
+            $used = (float) ($quota['disk_used_mb'] ?? $quota['disk_usage_mb'] ?? 0);
+            $limit = (float) ($quota['disk_limit_mb'] ?? $quota['disk_quota_mb'] ?? 0);
+            if ($limit > 0 || $used > 0) {
+                $out['disk'] = ['used' => $used, 'total' => $limit, 'unit' => 'MB'];
             }
+        } catch (Exception) {
+            // A panel that cannot answer leaves the gauge off the page rather
+            // than taking the page down with it.
         }
-        throw new RuntimeException('Seçilen Panelica planı bu sunucuda bulunamadı. Ürün planını kontrol edin.');
+
+        try {
+            $bandwidth = $this->api->get('/v1/bandwidth/accounts/' . $id);
+            $used = (float) ($bandwidth['used_mb'] ?? $bandwidth['total_mb'] ?? 0);
+            $limit = (float) ($bandwidth['limit_mb'] ?? 0);
+            if ($limit > 0 || $used > 0) {
+                $out['bandwidth'] = ['used' => $used, 'total' => $limit, 'unit' => 'MB'];
+            }
+        } catch (Exception) {
+        }
+
+        return $out;
     }
 
-    private function ensureDomain(string $domain, string $accountId): string
+    /** @return array<string,string> */
+    private function planChoices(): array
     {
-        for ($page = 1; $page <= 100; $page++) {
-            $domains = $this->client()->listDomains($page, 100);
-            foreach ($domains as $existing) {
-                if (strcasecmp((string) ($existing['domain_name'] ?? ''), $domain) === 0
-                    && (string) ($existing['user_id'] ?? '') === $accountId) {
-                    $existingId = trim((string) ($existing['id'] ?? ''));
-                    if ($existingId === '') {
-                        throw new RuntimeException('Panelica mevcut alan adı kaydının kimliği alınamadı.');
-                    }
-                    return $existingId;
-                }
+        $plans = $this->api->get('/v1/plans');
+        $choices = [];
+
+        foreach (is_array($plans) ? $plans : [] as $plan) {
+            if (! is_array($plan)) {
+                continue;
             }
-            if (count($domains) < 100) {
-                break;
+            $id = (string) ($plan['id'] ?? '');
+            if ($id !== '') {
+                $choices[$id] = (string) ($plan['name'] ?? $id);
             }
         }
-        $created = $this->client()->request('POST', '/v1/domains', [
-            'name' => $domain,
-            'user_id' => $accountId,
-        ]);
-        $domainId = trim((string) ($this->client()->data($created)['id'] ?? ''));
-        if ($domainId === '') {
-            throw new RuntimeException('Panelica alan adını oluşturdu ancak alan adı kimliğini yanıtlamadı.');
+
+        return $choices;
+    }
+
+    private function planId(): string
+    {
+        $plan = trim((string) ($this->options['plan_id'] ?? ''));
+
+        if ($plan === '') {
+            throw new Exception($this->text('plan_required'));
         }
-        return $domainId;
+
+        return $plan;
+    }
+
+    private function role(): string
+    {
+        $role = strtoupper(trim((string) ($this->options['account_role'] ?? 'USER')));
+
+        return in_array($role, ['USER', 'RESELLER'], true) ? $role : 'USER';
     }
 
     private function domain(): string
     {
-        $domain = strtolower(rtrim(trim((string) ($this->options['domain'] ?? '')), '.'));
-        if (strlen($domain) > 253 || filter_var($domain, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) === false) {
-            throw new RuntimeException('Hizmet alan adı geçersiz veya eksik.');
+        foreach ([$this->service['domain'] ?? null, $this->options['domain'] ?? null] as $value) {
+            $domain = strtolower(trim((string) $value));
+            if ($domain !== '') {
+                return $domain;
+            }
         }
-        return $domain;
+
+        return '';
     }
 
-    private function panelUrl(): string
+    private function username(string $domain): string
     {
-        $host = trim((string) ($this->server['hostname'] ?? $this->server['ip'] ?? ''));
-        $host = preg_replace('#^https?://#i', '', $host) ?? $host;
-        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
-            $host = '[' . $host . ']';
+        $given = trim((string) ($this->options['username'] ?? ''));
+        if ($given !== '') {
+            return $given;
         }
-        if (preg_match('/^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])$/D', $host) !== 1) {
-            throw new RuntimeException('Panelica panel adresi geçersiz.');
+
+        // From the domain, as the panel wants it: letters and digits, starting
+        // with a letter, at most sixteen characters.
+        $base = preg_replace('/[^a-z0-9]/', '', strtolower($domain)) ?? '';
+        if ($base === '' || ! ctype_alpha($base[0])) {
+            $base = 'pnl' . $base;
         }
-        $scheme = !empty($this->server['secure']) ? 'https' : 'http';
-        return $scheme . '://' . $host . ':' . (int) ($this->server['port'] ?? 8443) . '/';
+
+        return substr($base, 0, 16);
     }
 
-    private function webmailUrl(): string
+    private function password(): string
     {
-        return 'https://webmail.' . $this->domain() . '/';
+        $given = trim((string) ($this->options['password'] ?? ''));
+        if ($given !== '') {
+            return $given;
+        }
+
+        // Long enough for the panel's own rule (eight characters) with room to
+        // spare, and from a source meant for secrets.
+        $alphabet = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#%*-_';
+        $password = '';
+        for ($i = 0; $i < 16; $i++) {
+            $password .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+        }
+
+        return $password;
     }
 
-    private function client(): ApiClient
+    private function email(): string
     {
-        if ($this->api === null) {
-            include_once __DIR__ . DS . 'ApiClient.php';
-            $server = $this->serverInfo ?: (array) $this->server;
-            $server['password'] = (string) ($this->config['Api_key'] ?? $server['password'] ?? '');
-            $server['access_hash'] = (string) ($this->config['Api_secret'] ?? $server['access_hash'] ?? '');
-            $this->api = new ApiClient($server, function (string $action, array $request, array $response): void {
-                $this->save_log($action, $request, $response);
-            });
+        foreach ([$this->service['user_email'] ?? null, $this->options['email'] ?? null] as $value) {
+            $email = trim((string) $value);
+            if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL) !== false) {
+                return $email;
+            }
         }
-        return $this->api;
+
+        $domain = $this->domain();
+
+        return $domain !== '' ? 'hostmaster@' . $domain : 'hostmaster@localhost';
     }
-}
-}
-}
 
-namespace {
-
-/** WiseCP 3.1.x legacy server-module entry point. */
-if (!class_exists('WISECP\\Modules\\Servers\\ServerModule') && !class_exists('Panelica_Module')) {
-    class Panelica_Module
+    private function fullName(): string
     {
-        private array $server;
-        private array $moduleOptions = [];
-        private ?\WISECP\Modules\Servers\ApiClient $api = null;
+        $name = trim((string) ($this->service['user_name'] ?? ''));
 
-        public array $config = [];
-        public array $options = [];
-        public array $user = [];
-        public array $order = [];
-        public array $product = [];
-        public $lang = [];
-        public $error = '';
+        return $name !== '' ? $name : $this->domain();
+    }
 
-        public function __construct($server, $options = [])
-        {
-            $this->server = is_array($server) ? $server : [];
-            $this->moduleOptions = is_array($options) ? $options : [];
-            $this->options = $this->moduleOptions;
-            $moduleConfig = \Modules::Config('Servers', 'Panelica');
-            $externalConfig = $this->moduleOptions['config'] ?? $this->moduleOptions;
-            $this->config = array_merge(is_array($moduleConfig) ? $moduleConfig : [], is_array($externalConfig) ? $externalConfig : []);
-            $this->config['Api_key'] = (string) ($this->server['password'] ?? '');
-            $this->config['Api_secret'] = (string) ($this->server['access_hash'] ?? '');
-            $this->lang = \Modules::Lang('Servers', 'Panelica');
-        }
-
-        public function set_order($order = []): void
-        {
-            $this->order = is_array($order) ? $order : [];
-            if ($this->order === []) {
-                return;
-            }
-            \Helper::Load(['Products', 'User']);
-            $this->product = \Products::get($this->order['type'] ?? '', $this->order['product_id'] ?? 0) ?: [];
-            $this->user = \User::getData($this->order['owner_id'] ?? 0, 'id,name,surname,full_name,email,phone,lang,country', 'array') ?: [];
-        }
-
-        public function testConnect(): bool
-        {
-            try {
-                $this->api()->request('GET', '/v1/me');
-                return true;
-            } catch (\Throwable $exception) {
-                $this->error = $exception->getMessage();
-                return false;
+    private function panelHost(): string
+    {
+        foreach ([$this->server['hostname'] ?? null, $this->server['name'] ?? null, $this->server['ip'] ?? null] as $value) {
+            $host = trim((string) $value);
+            if ($host !== '') {
+                return preg_replace('#^https?://#i', '', $host) ?? $host;
             }
         }
 
-        public function test_connect(): bool
-        {
-            return $this->testConnect();
-        }
+        return '';
+    }
 
-        public function getPlans(): array|false
-        {
-            try {
-                return $this->api()->listPlans();
-            } catch (\Throwable $exception) {
-                $this->error = $exception->getMessage();
-                return false;
+    private function panelPort(): int
+    {
+        $port = (int) ($this->server['port'] ?? 8443);
+
+        return $port > 0 && $port < 65536 ? $port : 8443;
+    }
+
+    private function nameservers(): string
+    {
+        $ns = [];
+        foreach (['ns1', 'ns2', 'ns3', 'ns4'] as $key) {
+            $value = trim((string) ($this->server[$key] ?? ''));
+            if ($value !== '') {
+                $ns[] = $value;
             }
         }
 
-        public function createAccount($domain, $options = []): array|false
-        {
-            try {
-                $domain = strtolower(rtrim(trim((string) $domain), '.'));
-                if (filter_var($domain, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) === false) {
-                    throw new \RuntimeException('Hizmet alan adı geçersiz veya eksik.');
-                }
-                $options = is_array($options) ? $options : [];
-                $creation = (array) ($options['creation_info'] ?? $options['module_data'] ?? []);
-                if (isset($creation['create_account']) && is_array($creation['create_account'])) {
-                    $creation = $creation['create_account'];
-                }
-                $planName = trim((string) ($creation['plan'] ?? ''));
-                $plan = $this->findPlan($planName);
-                $email = filter_var((string) ($this->user['email'] ?? ''), FILTER_VALIDATE_EMAIL);
-                if (!is_string($email)) {
-                    throw new \RuntimeException('Geçerli müşteri e-posta adresi bulunamadı.');
-                }
+        return implode(', ', $ns);
+    }
 
-                $username = trim((string) ($options['config']['user'] ?? $options['username'] ?? ''));
-                if ($username === '') {
-                    $base = strtolower((string) strtok($domain, '.'));
-                    $username = preg_replace('/[^a-z0-9_-]/', '', $base) ?: 'user';
-                    $username = substr($username, 0, 20) . substr(bin2hex(random_bytes(4)), 0, 6);
-                }
-                if (!preg_match('/^[a-zA-Z][a-zA-Z0-9_-]{1,31}$/', $username)) {
-                    throw new \RuntimeException('Panelica kullanıcı adı geçersiz.');
-                }
-
-                $password = \Utility::generate_hash(20);
-                $account = $this->findAccount($username);
-                if ($account !== null) {
-                    if (strcasecmp((string) ($account['email'] ?? ''), $email) !== 0) {
-                        throw new \RuntimeException('Panelica kullanıcı adı başka bir e-posta adresine ait.');
-                    }
-                    throw new \RuntimeException('Bu Panelica hesabı zaten mevcut. Mevcut hizmet bilgileriyle yeniden oluşturma yapın.');
-                }
-
-                $created = $this->api()->request('POST', '/v1/accounts', [
-                    'username' => $username,
-                    'email' => $email,
-                    'password' => $password,
-                    'full_name' => trim((string) ($this->user['full_name'] ?? '')),
-                    'role' => 'USER',
-                    'plan_id' => (string) ($plan['id'] ?? ''),
-                ]);
-                $account = $this->api()->data($created);
-                if (empty($account['id'])) {
-                    throw new \RuntimeException('Panelica hesap kimliğini yanıtlamadı.');
-                }
-                try {
-                    $domainResult = $this->api()->request('POST', '/v1/domains', [
-                        'name' => $domain,
-                        'user_id' => (string) $account['id'],
-                    ]);
-                } catch (\Throwable $exception) {
-                    try {
-                        $this->api()->request('DELETE', '/v1/accounts/' . rawurlencode((string) $account['id']));
-                    } catch (\Throwable) {
-                        throw new \RuntimeException('Alan adı oluşturulamadı ve yeni Panelica hesabı otomatik temizlenemedi. Panelica panelinden hesabı kontrol edin.', 0, $exception);
-                    }
-                    throw $exception;
-                }
-                $domainData = $this->api()->data($domainResult);
-                if (empty($domainData['id'])) {
-                    throw new \RuntimeException('Panelica alan adını oluşturdu ancak alan adı kimliğini yanıtlamadı.');
-                }
-
-                return [
-                    'username' => $username,
-                    'password' => $password,
-                    'panelica_account_id' => (string) $account['id'],
-                    'panelica_domain_id' => (string) ($domainData['id'] ?? ''),
-                    'plan' => $planName,
-                ];
-            } catch (\Throwable $exception) {
-                $this->error = $exception->getMessage();
-                return false;
-            }
+    /** @return array<string,mixed> */
+    private function item(string $value, bool $copyable = false, bool $link = false): array
+    {
+        if (trim($value) === '') {
+            return [];
         }
 
-        public function suspend(): bool
-        {
-            return $this->accountAction('suspend');
+        $item = ['value' => $value];
+        if ($copyable) {
+            $item['copyable'] = true;
+        }
+        if ($link) {
+            $item['link'] = $value;
         }
 
-        public function unsuspend(): bool
-        {
-            return $this->accountAction('unsuspend');
+        return $item;
+    }
+
+    /** @return array<string,mixed> */
+    private function statusItem(string $status): array
+    {
+        $status = strtolower($status) ?: 'active';
+
+        return [
+            'value' => $this->text('status_' . $status) ?: $status,
+            'badge_color' => match ($status) {
+                'active' => 'success',
+                'suspended', 'terminated', 'deleted' => 'danger',
+                default => 'warning',
+            },
+        ];
+    }
+
+    /**
+     * A string from lang/, with :placeholders filled.
+     *
+     * @param array<string,string> $replace
+     */
+    private function text(string $key, array $replace = []): string
+    {
+        $text = (string) ($this->lang[$key] ?? '');
+
+        foreach ($replace as $name => $value) {
+            $text = str_replace(':' . $name, $value, $text);
         }
 
-        public function removeAccount($username = false): bool
-        {
-            try {
-                $id = trim((string) ($this->config['panelica_account_id'] ?? $this->moduleOptions['panelica_account_id'] ?? ''));
-                if ($id === '') {
-                    $account = $this->findAccount((string) ($username ?: $this->config['user'] ?? ''));
-                    if ($account === null) {
-                        return true;
-                    }
-                    $id = (string) ($account['id'] ?? '');
-                }
-                if ($id !== '') {
-                    $this->api()->request('DELETE', '/v1/accounts/' . rawurlencode($id));
-                }
-                return true;
-            } catch (\Throwable $exception) {
-                $this->error = $exception->getMessage();
-                return false;
-            }
-        }
-
-        public function terminate(): bool
-        {
-            return $this->removeAccount();
-        }
-
-        public function change_plan($planName): bool
-        {
-            try {
-                $plan = $this->findPlan(trim((string) $planName));
-                $serviceConfig = (array) ($this->moduleOptions['config'] ?? []);
-                $id = trim((string) ($serviceConfig['panelica_account_id'] ?? $this->moduleOptions['panelica_account_id'] ?? ''));
-                if ($id === '') {
-                    $username = trim((string) ($serviceConfig['user'] ?? $serviceConfig['username'] ?? $this->config['user'] ?? ''));
-                    $account = $this->findAccount($username);
-                    $id = (string) ($account['id'] ?? '');
-                }
-                if ($id === '') {
-                    throw new \RuntimeException('Panelica hesabı bulunamadı.');
-                }
-                $this->api()->request('PATCH', '/v1/accounts/' . rawurlencode($id), ['plan_id' => (string) $plan['id']]);
-                return true;
-            } catch (\Throwable $exception) {
-                $this->error = $exception->getMessage();
-                return false;
-            }
-        }
-
-        /** WiseCP 3.x order settings save hook; applies the selected plan to the active account. */
-        public function apply_options($old_options, $new_options = []): array|false
-        {
-            $old_options = is_array($old_options) ? $old_options : [];
-            $new_options = is_array($new_options) ? $new_options : [];
-            $oldPlan = trim((string) ($old_options['creation_info']['plan'] ?? ''));
-            $newPlan = trim((string) ($new_options['creation_info']['plan'] ?? ''));
-
-            if ($newPlan === '') {
-                $this->error = 'Panelica Hosting Planı seçilmelidir.';
-                return false;
-            }
-
-            $this->moduleOptions = $old_options;
-            $this->options = $old_options;
-            if ($newPlan !== $oldPlan && !$this->change_plan($newPlan)) {
-                return false;
-            }
-
-            $new_options['creation_info'] = (array) ($new_options['creation_info'] ?? []);
-            $new_options['creation_info']['plan'] = $newPlan;
-            $new_options['config'] = (array) ($new_options['config'] ?? $old_options['config'] ?? []);
-            $new_options['config']['plan'] = $newPlan;
-            $this->moduleOptions = $new_options;
-            $this->options = $new_options;
-
-            return $new_options;
-        }
-
-        /** WiseCP 3.1.x calls this after an approved hosting upgrade/downgrade. */
-        public function apply_updowngrade($orderopt = [], $product = []): bool
-        {
-            $this->moduleOptions = is_array($orderopt) ? $orderopt : [];
-            $this->options = $this->moduleOptions;
-            $product = is_array($product) ? $product : [];
-            $moduleData = (array) ($product['module_data'] ?? []);
-            $creation = (array) ($moduleData['create_account'] ?? []);
-            if ($creation === [] || array_key_exists('plan', $moduleData)) {
-                $creation = $moduleData;
-            }
-            $planName = trim((string) ($creation['plan'] ?? ''));
-            if ($planName === '') {
-                $this->error = 'Yükseltme ürününde Panelica Hosting Planı seçilmelidir.';
-                return false;
-            }
-
-            return $this->change_plan($planName);
-        }
-
-        public function activation_infos($type = 'html', $order = [], $lang = '')
-        {
-            $this->moduleOptions = is_array($order['options'] ?? null) ? $order['options'] : [];
-            $this->options = $this->moduleOptions;
-            $data = [
-                'module' => $this,
-                'options' => $this->moduleOptions,
-                'server' => $this->server,
-                'hosting' => $this->hostingDetails(),
-            ];
-            return \Modules::getPage('Servers', 'Panelica', 'activation-' . $type, $data);
-        }
-
-        /** WiseCP 3.x client-area hook for the active hosting service page. */
-        public function clientArea_home(): string
-        {
-            return \Modules::getPage('Servers', 'Panelica', 'clientArea-home', [
-                'module' => $this,
-                'options' => $this->moduleOptions,
-                'server' => $this->server,
-                'hosting' => $this->hostingDetails(),
-            ]);
-        }
-
-        /** @return array<string,mixed> */
-        public function client_area_data(): array
-        {
-            return $this->hostingDetails();
-        }
-
-        /** @return array<string,mixed> */
-        private function hostingDetails(): array
-        {
-            $service = (array) ($this->moduleOptions['config'] ?? []);
-            $domain = strtolower(rtrim(trim((string) ($this->moduleOptions['domain'] ?? $service['domain'] ?? '')), '.'));
-            $username = trim((string) ($service['user'] ?? $service['username'] ?? ''));
-            $accountId = trim((string) ($service['panelica_account_id'] ?? $this->moduleOptions['panelica_account_id'] ?? ''));
-            if ($accountId === '' && $username !== '') {
-                try {
-                    $account = $this->findAccount($username);
-                    $accountId = (string) ($account['id'] ?? '');
-                } catch (\Throwable $exception) {
-                    $this->error = $exception->getMessage();
-                }
-            }
-
-            $disk = $stats = $bandwidth = [];
-            if ($accountId !== '') {
-                $encodedId = rawurlencode($accountId);
-                foreach ([
-                    'disk' => '/v1/accounts/' . $encodedId . '/disk-usage',
-                    'stats' => '/v1/accounts/' . $encodedId . '/stats',
-                    'bandwidth' => '/v1/bandwidth/accounts/' . $encodedId,
-                ] as $key => $path) {
-                    try {
-                        ${$key} = $this->api()->data($this->api()->request('GET', $path));
-                    } catch (\Throwable $exception) {
-                        $this->error = $exception->getMessage();
-                    }
-                }
-            }
-
-            $host = trim((string) ($this->server['hostname'] ?? $this->server['ip'] ?? ''));
-            $host = preg_replace('#^https?://#i', '', $host) ?? $host;
-            $host = trim($host, '/');
-            if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
-                $host = '[' . $host . ']';
-            }
-            if (preg_match('/^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])$/D', $host) !== 1) {
-                $host = '';
-            }
-            $scheme = !empty($this->server['secure']) ? 'https' : 'http';
-
-            return [
-                'domain' => $domain,
-                'username' => $username,
-                'plan' => (string) ($service['plan'] ?? $this->moduleOptions['creation_info']['plan'] ?? ''),
-                'disk' => $disk,
-                'stats' => $stats,
-                'bandwidth' => $bandwidth,
-                'panel_url' => $host !== '' ? $scheme . '://' . $host . ':' . (int) ($this->server['port'] ?? 8443) . '/' : '',
-                'webmail_url' => $domain !== '' && filter_var($domain, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) !== false ? 'https://webmail.' . $domain . '/' : '',
-            ];
-        }
-
-        private function accountAction(string $action): bool
-        {
-            try {
-                $id = (string) ($this->config['panelica_account_id'] ?? $this->moduleOptions['panelica_account_id'] ?? '');
-                if ($id === '') {
-                    $account = $this->findAccount((string) ($this->config['user'] ?? ''));
-                    $id = (string) ($account['id'] ?? '');
-                }
-                if ($id === '') {
-                    throw new \RuntimeException('Panelica hesabı bulunamadı.');
-                }
-                $this->api()->request('POST', '/v1/accounts/' . rawurlencode($id) . '/' . $action, []);
-                return true;
-            } catch (\Throwable $exception) {
-                $this->error = $exception->getMessage();
-                return false;
-            }
-        }
-
-        private function findPlan(string $name): array
-        {
-            foreach ($this->api()->listPlans() as $plan) {
-                if (strcasecmp(trim((string) ($plan['name'] ?? '')), $name) === 0 && !empty($plan['id'])) {
-                    return $plan;
-                }
-            }
-            throw new \RuntimeException('Panelica hosting planı bulunamadı.');
-        }
-
-        private function findAccount(string $username): ?array
-        {
-            if ($username === '') {
-                return null;
-            }
-            foreach ($this->api()->listAccounts() as $account) {
-                if (strcasecmp((string) ($account['username'] ?? ''), $username) === 0
-                    && (!isset($account['role']) || strtoupper((string) $account['role']) === 'USER')) {
-                    return $account;
-                }
-            }
-            return null;
-        }
-
-        private function api(): \WISECP\Modules\Servers\ApiClient
-        {
-            if ($this->api === null) {
-                include_once __DIR__ . DS . 'ApiClient.php';
-                $server = $this->server;
-                $server['password'] = (string) ($this->config['Api_key'] ?? '');
-                $server['access_hash'] = (string) ($this->config['Api_secret'] ?? '');
-                $this->api = new \WISECP\Modules\Servers\ApiClient($server, function (string $action, array $request, array $response): void {
-                    \Modules::save_log('Servers', 'Panelica', $action, $request, $response);
-                });
-            }
-            return $this->api;
-        }
+        return $text;
     }
 }
-
-}
-
