@@ -1,0 +1,28 @@
+<?php
+declare(strict_types=1);
+
+/** @var array<string,mixed> $data */
+$data = is_array($data ?? null) ? $data : [];
+$e = static fn (mixed $value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+$disk = is_array($data['disk'] ?? null) ? $data['disk'] : [];
+$stats = is_array($data['stats'] ?? null) ? $data['stats'] : [];
+$bandwidth = is_array($data['bandwidth'] ?? null) ? $data['bandwidth'] : [];
+?>
+<section class="panelica-service-details">
+    <h3>Hosting hizmeti</h3>
+    <dl>
+        <dt>Alan adı</dt><dd><?= $e($data['domain'] ?? '') ?></dd>
+        <dt>Kullanıcı adı</dt><dd><?= $e($data['username'] ?? '') ?></dd>
+        <dt>wwwPlan</dt><dd><?= $e($data['plan'] ?? '') ?></dd>
+        <dt>Disk kullanımı</dt><dd><?= $e($disk['used_mb'] ?? '—') ?> / <?= $e($disk['quota_mb'] ?? '—') ?> MB</dd>
+        <dt>Trafik kullanımı</dt><dd><?= $e($bandwidth['bytes_used'] ?? '—') ?> / <?= $e($bandwidth['bytes_total'] ?? '—') ?> bayt</dd>
+        <dt>Web siteleri</dt><dd><?= $e($stats['domain_count'] ?? '—') ?></dd>
+        <dt>E-posta hesapları</dt><dd><?= $e($stats['email_count'] ?? '—') ?></dd>
+        <dt>Veritabanları</dt><dd><?= $e($stats['database_count'] ?? '—') ?></dd>
+    </dl>
+    <nav aria-label="Hosting bağlantıları">
+        <a href="<?= $e($data['panel_url'] ?? '#') ?>" target="_blank" rel="noopener noreferrer">Panelica Paneli</a>
+        <a href="<?= $e($data['webmail_url'] ?? '#') ?>" target="_blank" rel="noopener noreferrer">Webmail</a>
+    </nav>
+</section>
+
