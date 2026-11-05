@@ -75,7 +75,7 @@ abstract class ModuleTestCase extends TestCase
             'ns2' => 'ns2.example.test',
         ]);
 
-        $options += ['plan_id' => 'plan-uuid-1'];
+        $options += ['plan_id' => '11111111-1111-4111-8111-111111111111'];
         $service += ['id' => 42, 'domain' => 'customer.test', 'user_email' => 'buyer@example.test', 'user_name' => 'A Buyer'];
 
         if ($this->isLegacy()) {
@@ -184,7 +184,7 @@ abstract class ModuleTestCase extends TestCase
      * four bags back; WISECP 5 passes one array by reference. The caller here
      * only says which plan was chosen.
      */
-    protected function saveServiceForm(string $plan, string $was = 'plan-uuid-1'): mixed
+    protected function saveServiceForm(string $plan, string $was = '11111111-1111-4111-8111-111111111111'): mixed
     {
         if ($this->isLegacy()) {
             return $this->module->save_adminArea_service_fields([

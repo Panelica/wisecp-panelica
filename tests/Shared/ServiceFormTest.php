@@ -23,12 +23,12 @@ final class ServiceFormTest extends ModuleTestCase
     {
         $this->module();
         $this->givenAccount('acc-1');
-        $this->api->answer('GET', '/v1/plans', [['id' => 'plan-a', 'name' => 'Starter'], ['id' => 'plan-uuid-1', 'name' => 'Business']]);
+        $this->api->answer('GET', '/v1/plans', [['id' => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'name' => 'Starter'], ['id' => '11111111-1111-4111-8111-111111111111', 'name' => 'Business']]);
 
         $form = $this->serviceForm();
 
-        $this->assertSame(['plan-a' => 'Starter', 'plan-uuid-1' => 'Business'], $form['plan_id']['options']);
-        $this->assertSame('plan-uuid-1', $form['plan_id']['value'], 'the plan this service is on now');
+        $this->assertSame(['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa' => 'Starter', '11111111-1111-4111-8111-111111111111' => 'Business'], $form['plan_id']['options']);
+        $this->assertSame('11111111-1111-4111-8111-111111111111', $form['plan_id']['value'], 'the plan this service is on now');
 
         // The role is decided when the account is opened; what an operator
         // changes here is the plan.
@@ -41,8 +41,8 @@ final class ServiceFormTest extends ModuleTestCase
         $this->givenAccount('acc-1');
         $this->api->answer('PATCH', '/v1/accounts/acc-1', []);
 
-        $this->assertNotFalse($this->saveServiceForm('plan-big'));
-        $this->assertTrue($this->api->made('PATCH', '/v1/accounts/acc-1', ['plan_id' => 'plan-big']));
+        $this->assertNotFalse($this->saveServiceForm('b1111111-1111-4111-8111-b11111111111'));
+        $this->assertTrue($this->api->made('PATCH', '/v1/accounts/acc-1', ['plan_id' => 'b1111111-1111-4111-8111-b11111111111']));
     }
 
     public function test_saving_without_touching_the_plan_sends_nothing(): void
@@ -53,7 +53,7 @@ final class ServiceFormTest extends ModuleTestCase
         // On a plan with different limits a plan change is a real operation,
         // so an operator who saves the page to edit something else must not
         // set one off.
-        $this->assertNotFalse($this->saveServiceForm('plan-uuid-1'));
+        $this->assertNotFalse($this->saveServiceForm('11111111-1111-4111-8111-111111111111'));
         $this->assertSame(0, $this->api->timesCalled('PATCH', '/v1/accounts/acc-1'));
     }
 
@@ -74,6 +74,6 @@ final class ServiceFormTest extends ModuleTestCase
 
         // Otherwise WISECP records a plan the account is not on: the invoice
         // and the account disagree and nothing says so.
-        $this->assertFails(fn () => $this->saveServiceForm('plan-elsewhere'), 'that plan is not on this server');
+        $this->assertFails(fn () => $this->saveServiceForm('e1111111-1111-4111-8111-e11111111111'), 'that plan is not on this server');
     }
 }

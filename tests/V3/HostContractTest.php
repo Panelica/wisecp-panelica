@@ -131,7 +131,7 @@ final class HostContractTest extends ModuleTestCase
 
     public function test_the_package_answers_are_read_from_where_this_host_keeps_them(): void
     {
-        $this->module(['plan_id' => 'plan-from-creation-info']);
+        $this->module(['plan_id' => 'c1111111-1111-4111-8111-c11111111111']);
         $this->api->answer('GET', '/v1/accounts', [])
             ->answer('POST', '/v1/accounts', ['id' => 'acc-1', 'username' => 'customer'])
             ->answer('POST', '/v1/domains', []);
@@ -141,6 +141,6 @@ final class HostContractTest extends ModuleTestCase
         // What the package form saved becomes the product's module_data and
         // reaches the order as creation_info, one level down from the order
         // options - which is where WISECP's own cPanel module reads its plan.
-        $this->assertSame('plan-from-creation-info', $this->api->calls[1]['body']['plan_id']);
+        $this->assertSame('c1111111-1111-4111-8111-c11111111111', $this->api->calls[1]['body']['plan_id']);
     }
 }

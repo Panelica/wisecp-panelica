@@ -70,13 +70,13 @@ final class HostContractTest extends ModuleTestCase
     {
         $this->module();
 
-        $values = ['plan_id' => '  plan-b  ', 'account_role' => 'reseller'];
+        $values = ['plan_id' => '  bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb  ', 'account_role' => 'reseller'];
         $this->module->save_product_configuration($values);
 
         // The host takes the values by reference and expects nothing back:
         // returning them instead would discard the normalisation without a
         // word, and the package would keep the untrimmed value.
-        $this->assertSame('plan-b', $values['plan_id']);
+        $this->assertSame('bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb', $values['plan_id']);
         $this->assertSame('RESELLER', $values['account_role']);
     }
 
@@ -84,7 +84,7 @@ final class HostContractTest extends ModuleTestCase
     {
         $this->module();
 
-        $values = ['plan_id' => 'plan-a', 'account_role' => 'root'];
+        $values = ['plan_id' => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'account_role' => 'root'];
         $this->module->save_product_configuration($values);
 
         $this->assertSame('USER', $values['account_role']);

@@ -30,7 +30,41 @@ trait PanelicaCore
     // constant in a trait needs PHP 8.2, and the module has to run on the
     // installs that are out there.
 
-    protected PanelicaApi $api;
+    /**
+     * The API client, built when it is first needed.
+     *
+     * Not a typed property without a default any more, and the reason is a
+     * fault the operator hit: WISECP builds the module to draw the product form
+     * before any server is chosen, and reading an uninitialised typed property
+     * throws Error - which is not an Exception, so nothing here caught it. The
+     * form died and the plan selector simply never appeared, with no message
+     * anywhere. Everything goes through api() now, which throws something
+     * catchable instead.
+     */
+    protected ?PanelicaApi $api = null;
+
+    /**
+     * The API client, or a refusal that can be caught and shown.
+     */
+    private function api(): PanelicaApi
+    {
+        if ($this->api instanceof PanelicaApi) {
+            return $this->api;
+        }
+
+        // define_server_info() is where it is built, and the base class only
+        // calls that once a server is set. Asking again covers the case where
+        // the server arrived after construction.
+        if ($this->hostArray('server') !== []) {
+            $this->define_server_info($this->hostArray('server'));
+        }
+
+        if ($this->api instanceof PanelicaApi) {
+            return $this->api;
+        }
+
+        throw new Exception($this->text('no_server'));
+    }
 
     /** The id looked up from the username, for the rest of this call. */
     private ?string $resolvedAccountId = null;
@@ -194,13 +228,13 @@ trait PanelicaCore
     /** Does the key, the secret and the clock add up? */
     private function connect(): bool
     {
-        $this->api->get('/v1/plans');
+        $this->api()->get('/v1/plans');
 
         // The call worked, so this is not a failure - but if it only worked
         // with the certificate check off, the operator is entitled to know
         // that the panel is not proven to be the one they think it is. The
         // module log is where they look after pressing Test Connection.
-        if ($this->api->certificateWasNotVerified()) {
+        if ($this->api()->certificateWasNotVerified()) {
             $this->logCall('test_connect', ['host' => $this->panelHost()], [
                 'connected' => true,
                 'certificate' => 'not verified - the panel answered only with the certificate check off',
@@ -216,7 +250,7 @@ trait PanelicaCore
     {
         $choices = [];
 
-        foreach ($this->api->get('/v1/plans') as $plan) {
+        foreach ($this->api()->get('/v1/plans') as $plan) {
             if (! is_array($plan)) {
                 continue;
             }
@@ -269,7 +303,7 @@ trait PanelicaCore
         ];
 
         try {
-            $account = $this->api->post('/v1/accounts', $body);
+            $account = $this->api()->post('/v1/accounts', $body);
         } catch (Exception $e) {
             // The panel keeps one account per address. A customer's second
             // order carries the same address as their first, so without this
@@ -283,7 +317,7 @@ trait PanelicaCore
             }
 
             $body['email'] = $tagged;
-            $account = $this->api->post('/v1/accounts', $body);
+            $account = $this->api()->post('/v1/accounts', $body);
         }
 
         $id = (string) ($account['id'] ?? '');
@@ -323,7 +357,7 @@ trait PanelicaCore
         }
 
         try {
-            foreach ($this->api->get('/v1/accounts/' . $id . '/domains') as $existing) {
+            foreach ($this->api()->get('/v1/accounts/' . $id . '/domains') as $existing) {
                 if (is_array($existing) && strcasecmp((string) ($existing['name'] ?? $existing['domain_name'] ?? ''), $domain) === 0) {
                     return;
                 }
@@ -337,7 +371,7 @@ trait PanelicaCore
             // "name", which is what the endpoint calls it. "domain_name" was
             // refused with "Field validation for 'Name' failed on the required
             // tag", and no faked test could have known that.
-            $this->api->post('/v1/domains', ['user_id' => $id, 'name' => $domain]);
+            $this->api()->post('/v1/domains', ['user_id' => $id, 'name' => $domain]);
         } catch (Exception $e) {
             // The account stays: a second attempt finds it by its username and
             // comes back here rather than opening another one.
@@ -350,14 +384,14 @@ trait PanelicaCore
     private function suspendAccount(): bool
     {
         $reason = $this->serviceValue('suspended_reason', 'suspend_reason');
-        $this->api->post('/v1/accounts/' . $this->accountId() . '/suspend', ['reason' => $reason !== '' ? $reason : 'Suspended from WISECP']);
+        $this->api()->post('/v1/accounts/' . $this->accountId() . '/suspend', ['reason' => $reason !== '' ? $reason : 'Suspended from WISECP']);
 
         return true;
     }
 
     private function unsuspendAccount(): bool
     {
-        $this->api->post('/v1/accounts/' . $this->accountId() . '/unsuspend');
+        $this->api()->post('/v1/accounts/' . $this->accountId() . '/unsuspend');
 
         return true;
     }
@@ -372,9 +406,9 @@ trait PanelicaCore
         }
 
         try {
-            $this->api->delete('/v1/accounts/' . $id);
+            $this->api()->delete('/v1/accounts/' . $id);
         } catch (Exception $e) {
-            if (! $this->api->lastStatusWas(404)) {
+            if (! $this->api()->lastStatusWas(404)) {
                 throw $e;
             }
         }
@@ -391,7 +425,7 @@ trait PanelicaCore
 
         // "new_password", which is what the endpoint requires; "password" was
         // refused with "Invalid Request Body", measured on a live panel.
-        $this->api->post('/v1/accounts/' . $this->accountId() . '/change-password', ['new_password' => $password]);
+        $this->api()->post('/v1/accounts/' . $this->accountId() . '/change-password', ['new_password' => $password]);
         $this->rememberPassword($password);
 
         return true;
@@ -413,7 +447,9 @@ trait PanelicaCore
 
         // A package without a plan is a configuration mistake, not something
         // to do quietly: setPlan() refuses an empty one.
-        $this->setPlan((string) ($module['plan_id'] ?? $product['plan_id'] ?? ''));
+        $wanted = trim((string) ($module['plan_id'] ?? $module['plan'] ?? $product['plan_id'] ?? $product['plan'] ?? ''));
+
+        $this->setPlan($wanted === '' ? '' : $this->resolvePlan($wanted));
 
         return true;
     }
@@ -438,7 +474,7 @@ trait PanelicaCore
             return false;
         }
 
-        $this->api->patch('/v1/accounts/' . $this->accountId(), ['plan_id' => $planId]);
+        $this->api()->patch('/v1/accounts/' . $this->accountId(), ['plan_id' => $planId]);
 
         return true;
     }
@@ -446,7 +482,7 @@ trait PanelicaCore
     /** @return array<string,mixed> */
     private function accountSnapshot(): array
     {
-        return $this->api->get('/v1/accounts/' . $this->accountId());
+        return $this->api()->get('/v1/accounts/' . $this->accountId());
     }
 
     /**
@@ -475,7 +511,7 @@ trait PanelicaCore
         $out = [];
 
         try {
-            $disk = $this->api->get('/v1/accounts/' . $id . '/disk-usage');
+            $disk = $this->api()->get('/v1/accounts/' . $id . '/disk-usage');
             $out['disk'] = [
                 'used' => (float) ($disk['used_mb'] ?? 0),
                 'limit' => (float) ($disk['quota_mb'] ?? 0),
@@ -486,7 +522,7 @@ trait PanelicaCore
         }
 
         try {
-            $traffic = $this->api->get('/v1/bandwidth/accounts/' . $id);
+            $traffic = $this->api()->get('/v1/bandwidth/accounts/' . $id);
             $out['bandwidth'] = [
                 'used' => (float) ($traffic['bytes_used'] ?? 0) / 1048576,
                 'limit' => (float) ($traffic['bytes_total'] ?? 0) / 1048576,
@@ -509,7 +545,7 @@ trait PanelicaCore
     private function trafficCeiling(string $id): float
     {
         try {
-            $quota = $this->api->get('/v1/resource-quota/users/' . $id);
+            $quota = $this->api()->get('/v1/resource-quota/users/' . $id);
         } catch (Exception) {
             return 0.0;
         }
@@ -641,7 +677,7 @@ trait PanelicaCore
     private function accountList(): array
     {
         try {
-            $accounts = $this->api->get('/v1/accounts');
+            $accounts = $this->api()->get('/v1/accounts');
         } catch (Exception) {
             return [];
         }
@@ -766,16 +802,57 @@ trait PanelicaCore
         return $name !== '' ? $name : $domain;
     }
 
-    /** @param array<string,mixed> $options */
+    /**
+     * The plan the package hands out, as an id the panel knows.
+     *
+     * Read under either key and accepted as either an id or a name. WISECP's
+     * own cPanel and KeyHelp modules store the plan under "plan" and store the
+     * plan's NAME, resolving it to an id when they provision; a package
+     * configured before this module used "plan_id" would otherwise stop
+     * working for no reason the operator can see.
+     *
+     * @param array<string,mixed> $options
+     */
     private function planId(array $options): string
     {
-        $plan = trim((string) ($options['plan_id'] ?? ''));
+        // The first key that actually carries something: an empty plan_id must
+        // not hide a plan that is there under the other name.
+        $plan = '';
+        foreach ([$options['plan_id'] ?? '', $options['plan'] ?? ''] as $value) {
+            $plan = trim((string) $value);
+            if ($plan !== '') {
+                break;
+            }
+        }
 
         if ($plan === '') {
             throw new Exception($this->text('plan_required'));
         }
 
-        return $plan;
+        return $this->resolvePlan($plan);
+    }
+
+    /**
+     * A plan given by id or by name, as an id.
+     *
+     * An id needs no call: Panelica's are UUIDs, so anything shaped like one
+     * is taken as given. Anything else is matched against the panel's plan
+     * names, and a name that matches nothing is refused by its own name rather
+     * than sent on to be rejected as an unknown id.
+     */
+    private function resolvePlan(string $plan): string
+    {
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $plan) === 1) {
+            return $plan;
+        }
+
+        foreach ($this->planChoices() as $id => $name) {
+            if (strcasecmp($name, $plan) === 0) {
+                return $id;
+            }
+        }
+
+        throw new Exception($this->text('plan_unknown', ['plan' => $plan]));
     }
 
     /** @param array<string,mixed> $options */

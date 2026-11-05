@@ -20,15 +20,15 @@ final class PackageTest extends ModuleTestCase
     {
         $this->module();
         $this->api->answer('GET', '/v1/plans', [
-            ['id' => 'plan-a', 'name' => 'Starter'],
-            ['id' => 'plan-b', 'name' => 'Business'],
+            ['id' => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'name' => 'Starter'],
+            ['id' => 'bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb', 'name' => 'Business'],
         ]);
 
-        $form = $this->packageForm(['plan_id' => 'plan-b']);
+        $form = $this->packageForm(['plan_id' => 'bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb']);
 
         $this->assertSame('dropdown', $form['plan_id']['type']);
-        $this->assertSame(['plan-a' => 'Starter', 'plan-b' => 'Business'], $form['plan_id']['options']);
-        $this->assertSame('plan-b', $form['plan_id']['value']);
+        $this->assertSame(['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa' => 'Starter', 'bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb' => 'Business'], $form['plan_id']['options']);
+        $this->assertSame('bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb', $form['plan_id']['value']);
         $this->assertSame(['USER' => 'Customer', 'RESELLER' => 'Reseller'], $form['account_role']['options']);
     }
 
@@ -63,14 +63,58 @@ final class PackageTest extends ModuleTestCase
         }
     }
 
+    public function test_a_plan_given_by_name_is_resolved_to_its_id(): void
+    {
+        $this->module(['plan_id' => 'Business']);
+        $this->api->answer('GET', '/v1/plans', [
+            ['id' => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'name' => 'Starter'],
+            ['id' => 'bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb', 'name' => 'Business'],
+        ])->answer('GET', '/v1/accounts', [])
+            ->answer('POST', '/v1/accounts', ['id' => 'acc-1', 'username' => $this->expectedUsername()])
+            ->answer('GET', '/v1/accounts/acc-1/domains', [])
+            ->answer('POST', '/v1/domains', []);
+
+        $this->create();
+
+        // WISECP's own cPanel and KeyHelp modules store the plan's name, not
+        // its id, so a package configured the way their operators are used to
+        // has to work rather than fail as an unknown id.
+        $this->assertSame('bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb', $this->api->bodyOf('POST', '/v1/accounts')['plan_id']);
+    }
+
+    public function test_a_plan_name_the_panel_does_not_have_is_refused_by_name(): void
+    {
+        $this->module(['plan_id' => 'Platinum']);
+        $this->api->answer('GET', '/v1/plans', [['id' => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'name' => 'Starter']])
+            ->answer('GET', '/v1/accounts', []);
+
+        $this->assertFails(fn () => $this->create(), 'Platinum');
+        $this->assertSame(0, $this->api->timesCalled('POST', '/v1/accounts'));
+    }
+
+    public function test_the_plan_is_read_under_the_key_the_stock_modules_use(): void
+    {
+        // They call it "plan"; this module calls it "plan_id". Both are read,
+        // so a product configured either way provisions.
+        $this->module(['plan_id' => '', 'plan' => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa']);
+        $this->api->answer('GET', '/v1/accounts', [])
+            ->answer('POST', '/v1/accounts', ['id' => 'acc-1', 'username' => $this->expectedUsername()])
+            ->answer('GET', '/v1/accounts/acc-1/domains', [])
+            ->answer('POST', '/v1/domains', []);
+
+        $this->create();
+
+        $this->assertSame('aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', $this->api->bodyOf('POST', '/v1/accounts')['plan_id']);
+    }
+
     public function test_upgrading_moves_the_account_to_the_new_packages_plan(): void
     {
         $this->module();
         $this->givenAccount('acc-1');
         $this->api->answer('PATCH', '/v1/accounts/acc-1', []);
 
-        $this->assertTrue($this->moveToPackage(['module_data' => ['plan_id' => 'plan-big']]));
-        $this->assertTrue($this->api->made('PATCH', '/v1/accounts/acc-1', ['plan_id' => 'plan-big']));
+        $this->assertTrue($this->moveToPackage(['module_data' => ['plan_id' => 'b1111111-1111-4111-8111-b11111111111']]));
+        $this->assertTrue($this->api->made('PATCH', '/v1/accounts/acc-1', ['plan_id' => 'b1111111-1111-4111-8111-b11111111111']));
     }
 
     public function test_upgrading_to_a_package_with_no_plan_is_refused_rather_than_done_quietly(): void
@@ -87,7 +131,7 @@ final class PackageTest extends ModuleTestCase
     public function test_the_connection_test_asks_something_that_needs_the_signature(): void
     {
         $this->module();
-        $this->api->answer('GET', '/v1/plans', [['id' => 'plan-a', 'name' => 'Starter']]);
+        $this->api->answer('GET', '/v1/plans', [['id' => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'name' => 'Starter']]);
 
         $this->assertTrue($this->testConnection());
         $this->assertTrue($this->api->made('GET', '/v1/plans'));
@@ -96,7 +140,7 @@ final class PackageTest extends ModuleTestCase
     public function test_a_connection_that_only_worked_unverified_says_so_in_the_log(): void
     {
         $this->module();
-        $this->api->answer('GET', '/v1/plans', [['id' => 'plan-a', 'name' => 'Starter']]);
+        $this->api->answer('GET', '/v1/plans', [['id' => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'name' => 'Starter']]);
         $this->api->certificateUnverified = true;
 
         // It connected, so this is not a failure - but a panel that could not
@@ -111,7 +155,7 @@ final class PackageTest extends ModuleTestCase
     public function test_a_verified_connection_says_nothing_extra(): void
     {
         $this->module();
-        $this->api->answer('GET', '/v1/plans', [['id' => 'plan-a', 'name' => 'Starter']]);
+        $this->api->answer('GET', '/v1/plans', [['id' => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'name' => 'Starter']]);
 
         $this->assertTrue($this->testConnection());
         $this->assertStringNotContainsString('not verified', implode(' ', array_column($this->logs(), 'response')));

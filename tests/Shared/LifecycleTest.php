@@ -32,7 +32,7 @@ final class LifecycleTest extends ModuleTestCase
         // The plan the package carries, the buyer's address, and a name the
         // panel may adjust rather than refuse.
         $created = $this->api->calls[1]['body'];
-        $this->assertSame('plan-uuid-1', $created['plan_id']);
+        $this->assertSame('11111111-1111-4111-8111-111111111111', $created['plan_id']);
         $this->assertSame('buyer@example.test', $created['email']);
         $this->assertTrue($created['auto_username']);
         $this->assertSame('USER', $created['role']);

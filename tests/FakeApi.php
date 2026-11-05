@@ -99,6 +99,26 @@ final class FakeApi implements PanelicaApi
         return false;
     }
 
+    /**
+     * The body of the first call to this path, whatever its position.
+     *
+     * Asserting on $api->calls[1] breaks as soon as the module makes one more
+     * call earlier - resolving a plan name, for instance - and the test then
+     * fails for a reason that has nothing to do with what it is about.
+     *
+     * @return array<string,mixed>|null
+     */
+    public function bodyOf(string $method, string $path): ?array
+    {
+        foreach ($this->calls as $call) {
+            if ($call['method'] === strtoupper($method) && $call['path'] === $path) {
+                return $call['body'];
+            }
+        }
+
+        return null;
+    }
+
     public function timesCalled(string $method, string $path): int
     {
         return count(array_filter($this->calls, fn (array $c): bool => $c['method'] === strtoupper($method) && $c['path'] === $path));

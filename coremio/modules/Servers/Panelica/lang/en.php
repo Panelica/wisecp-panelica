@@ -21,6 +21,8 @@ return [
     'password_required' => 'A new password is needed.',
     'no_account_returned' => 'The panel accepted the account but returned no id.',
     'no_account_id' => 'This service has no Panelica account yet, so there is nothing to act on.',
+    'no_server' => 'No Panelica server is chosen yet, so the panel cannot be asked anything.',
+    'plan_unknown' => 'The panel has no plan called :plan. Choose one on the product\'s Module tab.',
     'domain_failed' => 'The account :username was opened, but the panel refused the domain :domain, so the site is not set up: :error. Running create again will reuse the account and try the domain once more.',
 
     // Service page

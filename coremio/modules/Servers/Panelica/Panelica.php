@@ -412,7 +412,7 @@ class Panelica extends ServerModule
     public function listAccounts()
     {
         try {
-            $accounts = $this->api->get('/v1/accounts');
+            $accounts = $this->api()->get('/v1/accounts');
         } catch (Exception $e) {
             return $this->failed(__FUNCTION__, $e);
         }
@@ -574,7 +574,11 @@ class Panelica extends ServerModule
         try {
             $plans = $this->planChoices();
             $unavailable = null;
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
+            // Throwable, not Exception: this runs before a server is chosen,
+            // and what came back from an uninitialised client was an Error.
+            // Letting one escape here is what left the form with no plan
+            // selector at all.
             $plans = null;
             $unavailable = $this->text('plans_unavailable', ['error' => $e->getMessage()]);
         }
@@ -759,7 +763,7 @@ class Panelica extends ServerModule
     private function openPanel(string $path)
     {
         try {
-            $answer = $this->api->post($path);
+            $answer = $this->api()->post($path);
         } catch (Exception $e) {
             // A WISECP 3 button answers the browser itself, so the reason is
             // printed for the customer rather than thrown at a caller that is
@@ -785,7 +789,7 @@ class Panelica extends ServerModule
     /** A one-time link to the panel, as a URL for the caller to follow. */
     private function panelLoginUrl(string $path): string
     {
-        $url = $this->urlFrom($this->api->post($path));
+        $url = $this->urlFrom($this->api()->post($path));
 
         if ($url === '') {
             throw new Exception($this->text('no_sso_url'));
