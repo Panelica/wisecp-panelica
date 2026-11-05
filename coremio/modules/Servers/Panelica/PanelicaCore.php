@@ -719,18 +719,36 @@ trait PanelicaCore
     /** @param array<string,mixed> $options */
     private function email(string $domain, array $options): string
     {
-        foreach ([$options['email'] ?? '', $this->serviceValue('user_email', 'email', 'client_email')] as $value) {
+        $candidates = [
+            $options['email'] ?? '',
+            // The buyer. Measured on a live WISECP 3 install, where every stock
+            // module reads the address from here and nowhere else; WISECP 5
+            // resolves the same thing onto the service.
+            $this->hostArray('user')['email'] ?? '',
+            $this->serviceValue('user_email', 'email', 'client_email'),
+        ];
+
+        foreach ($candidates as $value) {
             $email = trim((string) $value);
             if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL) !== false) {
                 return $email;
             }
         }
 
+        // Last resort, so an order never fails for the want of an address. The
+        // panel needs one and the account is reachable through the panel.
         return $domain !== '' ? 'hostmaster@' . $domain : 'hostmaster@localhost';
     }
 
     private function fullName(string $domain): string
     {
+        $buyer = $this->hostArray('user');
+        $both = trim(trim((string) ($buyer['name'] ?? '')) . ' ' . trim((string) ($buyer['surname'] ?? '')));
+
+        if ($both !== '') {
+            return $both;
+        }
+
         $name = $this->serviceValue('user_name', 'client_name', 'name');
 
         return $name !== '' ? $name : $domain;

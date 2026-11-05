@@ -112,6 +112,23 @@ final class HostContractTest extends ModuleTestCase
         $this->assertSame('customer', $this->api->calls[1]['body']['username']);
     }
 
+    public function test_the_buyers_address_and_name_come_from_where_this_host_keeps_them(): void
+    {
+        $this->module();
+        $this->api->answer('GET', '/v1/accounts', [])
+            ->answer('POST', '/v1/accounts', ['id' => 'acc-1', 'username' => 'customer'])
+            ->answer('GET', '/v1/accounts/acc-1/domains', [])
+            ->answer('POST', '/v1/domains', []);
+
+        $this->create();
+
+        // The buyer is on its own property here, not on the service. Reading
+        // the wrong place does not fail: the account is opened with
+        // hostmaster@<domain> and the customer never hears from the panel.
+        $this->assertSame('buyer@example.test', $this->api->calls[1]['body']['email']);
+        $this->assertSame('A Buyer', $this->api->calls[1]['body']['full_name'], 'name and surname, as this host splits them');
+    }
+
     public function test_the_package_answers_are_read_from_where_this_host_keeps_them(): void
     {
         $this->module(['plan_id' => 'plan-from-creation-info']);

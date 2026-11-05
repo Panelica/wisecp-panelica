@@ -29,11 +29,54 @@ open the account and its domain, read it back, the gauges, suspend, unsuspend,
 change the password, move the plan, the service form, a one-time panel login,
 and delete, with nothing left behind on the panel afterwards.
 
-**It has not yet been run inside a real WISECP installation.** Both hosts are
-stood in by stand-ins built from WISECP's own sample modules and developer
-documentation, so what is proven is that the module calls the right names and
-the panel accepts what it sends. The module is unreleased and this repository
-is private until a real WISECP has run it.
+The module is also **installed on a real WISECP 3.1.9.8.2 install** and loads
+there: the class resolves, it instantiates, and all eighteen verbs that
+generation calls are present, measured with that server's own PHP 8.2.35.
+**WISECP itself has not yet driven it** - adding the server and placing an
+order needs an API key on the panel it talks to - so the module is unreleased
+and this repository is private until that is done.
+
+### What the real install corrected
+
+Reading one WISECP 3 sample module was not enough. On the live install:
+
+- **The class name was wrong and would never have been found.** That core
+  includes `modules/Servers/<Folder>/<Folder>.php` and looks for
+  `<Folder>_Module` **in the global namespace**. All eighteen stock server
+  modules are declared that way and not one of them uses a namespace; thirteen
+  extend `ServerModule` and five extend nothing. WISECP 5 is the opposite:
+  `namespace WISECP\Modules\Servers`, class `<Folder>`. The file now declares
+  both - the work in the namespaced class, the older name a two-line subclass
+  of it - because a class the core cannot find is the quietest failure there
+  is: nothing is called and nothing is logged.
+- **The module has to load its own parts.** The core includes `<Folder>.php`
+  and nothing else in the directory, so the trait and the API client are
+  required at the top of that file. The suite could not have caught this: its
+  bootstrap loads them in advance.
+- **The buyer is on `$this->user`**, not on the service: `email`, `name`,
+  `surname`, `id`, `lang`. Twenty-seven of the stock modules' reads go there
+  and nowhere else. Reading the wrong place does not fail - the account is
+  opened with `hostmaster@<domain>` and the customer never hears from the
+  panel.
+
+And what it confirmed, which matters just as much:
+
+- `KeyHelp` and `ApisCP` - both `type: hosting`, both extending `ServerModule` -
+  use exactly the vocabulary this module carries: `testConnect`,
+  `config_options`, `create`, `suspend`, `unsuspend`, `terminate`,
+  `change_password`, `apply_updowngrade`, `getDisk`, `getBandwidth`,
+  `listAccounts`, `clientArea`, `clientArea_buttons`,
+  `save_adminArea_service_fields`, `use_clientArea_SingleSignOn`,
+  `use_clientArea_webMail`. (The older `createAccount`/`removeAccount` family
+  that cPanel, DirectAdmin, HestiaCP and CyberPanel use is a second style the
+  same core still supports.)
+- `create($domain = '', array $order_options = [])` and its return
+  (`username`, `password`, `ftp_info` with `port` 21) match exactly, as does
+  `getDisk()`'s (`limit`, `used`, `used-percent`, `format-limit`,
+  `format-used`).
+- `$this->config["user"]` is the service's username (128 reads),
+  `$this->order["id"]`, `["options"]`, `["name"]` the order, and `save_log` is
+  static - all as the stand-in models them.
 
 ### What the live run found that no faked test could
 
@@ -62,10 +105,10 @@ invisible to a test that fakes the answer:
 ### The panel's certificate has to be one the WISECP server trusts
 
 The module verifies TLS, as it should, and it does not offer a switch to turn
-that off. A Panelica whose panel still has its self-signed certificate will
-therefore refuse to connect, and no error inside WISECP can make that clearer
-than it is: install a real certificate for the panel's hostname, and enter that
-hostname on the server form rather than the IP address.
+that off. So the panel needs a certificate the WISECP server trusts, and the
+server form needs the **hostname that certificate covers** - not the IP
+address, which a certificate almost never covers. A panel still on its
+self-signed certificate will refuse to connect until it has a real one.
 
 ## Two generations
 

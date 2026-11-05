@@ -84,6 +84,8 @@ abstract class ModuleTestCase extends TestCase
             $module->order = $service + ['options' => ['creation_info' => $options]];
             $module->options = ['creation_info' => $options];
             $module->config = ['user' => $this->serviceUser, 'ip' => '203.0.113.10'];
+            // The buyer sits on its own property here, not on the service.
+            $module->user = ['id' => 7, 'email' => 'buyer@example.test', 'name' => 'A', 'surname' => 'Buyer', 'lang' => 'tr'];
         } else {
             $module->options = $options;
             $module->service = $service + ['username' => $this->serviceUser];

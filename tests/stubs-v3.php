@@ -39,6 +39,14 @@ class ServerModule
     /** @var array<string,mixed> */
     public array $options = [];
 
+    /**
+     * The buyer. Measured on a live 3.1.9.8.2 install: every stock module reads
+     * the address, the name and the surname from here, and nowhere else.
+     *
+     * @var array<string,mixed>
+     */
+    public array $user = [];
+
     /** @var array<string,mixed> */
     public array $lang = [];
 

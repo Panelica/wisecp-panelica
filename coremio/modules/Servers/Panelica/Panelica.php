@@ -2,10 +2,32 @@
 
 declare(strict_types=1);
 
-namespace WISECP\Modules\Servers;
+/*
+ * Two namespace blocks, because the two generations disagree about what the
+ * class is called and a module file is loaded by name.
+ *
+ * Measured on a live WISECP 3.1.9.8.2 install: every one of its eighteen stock
+ * server modules declares "class <Folder>_Module" in the global namespace, and
+ * not one of them uses a namespace at all. WISECP 5 is the other way round -
+ * namespace WISECP\Modules\Servers, class <Folder>. A file that is only one of
+ * those is a module the other host cannot find, and a class the core cannot
+ * find produces no error anywhere: nothing is called.
+ *
+ * So the work lives in the namespaced class and the global name is a two-line
+ * subclass of it. Both hosts load the same code.
+ */
+
+namespace WISECP\Modules\Servers {
 
 use Exception;
 use ServerModule;
+
+// The core includes <Folder>.php and nothing else in the directory, so the file
+// pulls in its own parts. Without this the trait below is undefined and the
+// module dies the moment WISECP loads it.
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'PanelicaApi.php';
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'PanelicaCore.php';
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'ApiClient.php';
 
 /*
  * Panelica hosting accounts, driven from WISECP.
@@ -57,9 +79,6 @@ class Panelica extends ServerModule
      */
     protected function define_server_info($server = []): void
     {
-        include_once __DIR__ . DIRECTORY_SEPARATOR . 'PanelicaApi.php';
-        include_once __DIR__ . DIRECTORY_SEPARATOR . 'ApiClient.php';
-
         $this->api = new ApiClient($server, function (string $path, array $request, array $response): void {
             $this->logCall('api', ['path' => $path] + $request, $response);
         });
@@ -833,5 +852,21 @@ class Panelica extends ServerModule
         }
 
         return false;
+    }
+}
+}
+
+namespace {
+    /*
+     * The name WISECP 3 loads. Measured on a live 3.1.9.8.2 install: the core
+     * includes modules/Servers/<Folder>/<Folder>.php and looks for the class
+     * <Folder>_Module in the global namespace. Thirteen of its stock modules
+     * declare exactly that and extend ServerModule; five extend nothing.
+     *
+     * There is no second implementation here on purpose. Everything is in the
+     * class above, and this is the name the older core can see it by.
+     */
+    class Panelica_Module extends \WISECP\Modules\Servers\Panelica
+    {
     }
 }
