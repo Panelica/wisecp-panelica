@@ -38,10 +38,14 @@ change the password, move the plan, the service form, a one-time panel login,
 the account list, and delete - with nothing left behind on the panel
 afterwards.
 
-**WISECP itself has still not driven it.** Defining the server, binding a
-product to it and letting an order run through the queue is the operator's own
-screen, and that is the last unproven step. The module is unreleased and this
-repository is private until it is done.
+The operator who reported the original module has since defined the server,
+bound a product to it and confirmed the package screen offers their plans, with
+nothing outstanding on their side. That was the last step this repository was
+waiting on, and it is why the code is public.
+
+What is not claimed: nobody has yet run a paid order through a production
+WISECP queue end to end on this module. If you do and something breaks, the
+module log line is the thing to send - every failure path writes one.
 
 ### What the real install corrected
 
