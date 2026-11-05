@@ -45,7 +45,23 @@ repository is private until it is done.
 
 ### What the real install corrected
 
-Reading one WISECP 3 sample module was not enough. On the live install:
+Reading one WISECP 3 sample module was not enough, and twice what it taught was
+wrong. On the live install:
+
+- **Four of the five pages this generation renders had been deleted from this
+  repository, and that was the reported fault.** WISECP 3 does not read
+  `config_options()` itself: it includes
+  `pages/create-account-form-elements.php`, and that page is what asks the
+  module for its fields and hands them to the base class's
+  `config_options_output()` to draw. The same goes for `order-detail.php` on an
+  order, and `activation-html.php` / `activation-text.php` for the welcome
+  mail. All eighteen stock server modules carry those four; this one carried
+  none, so the new hosting package screen showed the server selector and then
+  nothing at all, with no error anywhere - reported twice before the cause was
+  found. An earlier commit here had removed them as "unreachable" on the
+  strength of a documentation line that only describes client-area pages. They
+  are back, written the way the stock ApisCP module writes them, and a test
+  asserts each one exists and renders.
 
 - **The class name was wrong and would never have been found.** That core
   includes `modules/Servers/<Folder>/<Folder>.php` and looks for

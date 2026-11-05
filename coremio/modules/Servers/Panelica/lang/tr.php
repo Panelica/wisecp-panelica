@@ -43,6 +43,11 @@ return [
     'open_panel' => 'Paneli ac',
     'open_webmail' => 'Webmail',
     'back' => 'Geri',
+    'password' => 'Parola',
+
+    // Hos geldin postasi ve yoneticinin hizmet ekrani
+    'mail_intro' => 'Hosting hesabiniz hazir. Bilgileri asagida.',
+    'service_username_info' => 'Bu hizmetin paneldeki hesabi. Burada degistirmek yalnizca WISECP kaydini degistirir.',
     'panel_unavailable' => 'Panel acilamadi: :error',
     'no_sso_url' => 'Panel bir giris baglantisi dondurmedi.',
 ];

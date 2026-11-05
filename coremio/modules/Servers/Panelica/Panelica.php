@@ -529,6 +529,22 @@ class Panelica extends ServerModule
         ];
     }
 
+    /**
+     * The buttons on the service's admin screen.
+     *
+     * Declared because order-detail.php renders them and the core dispatches
+     * the key to use_adminArea_<key>: without this the operator has no way to
+     * reach the panel from the order, which every stock module offers.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function adminArea_buttons()
+    {
+        return [
+            'SingleSignOn' => ['text' => $this->text('open_panel'), 'type' => 'function', 'target_blank' => true],
+        ];
+    }
+
     /** The panel, opened as the account's own user. */
     public function use_clientArea_SingleSignOn()
     {

@@ -43,6 +43,11 @@ return [
     'open_panel' => 'Open the panel',
     'open_webmail' => 'Webmail',
     'back' => 'Back',
+    'password' => 'Password',
+
+    // The welcome mail and the admin's service screen
+    'mail_intro' => 'Your hosting account is ready. These are its details.',
+    'service_username_info' => 'The account this service has on the panel. Changing it here only changes what WISECP records.',
     'panel_unavailable' => 'The panel could not be opened: :error',
     'no_sso_url' => 'The panel did not return a login link.',
 ];

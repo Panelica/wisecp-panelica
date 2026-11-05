@@ -155,6 +155,63 @@ class ServerModule
         return $out;
     }
 
+    /**
+     * Renders the fields a module returns, the way the real base class does for
+     * the package and order screens. The prefix becomes the input name, so
+     * plan_id with "module_data" is saved as module_data[plan_id].
+     *
+     * @param array<string,array<string,mixed>> $fields
+     */
+    public function config_options_output(array $fields = [], string $prefix = ''): string
+    {
+        $out = '';
+
+        foreach ($fields as $key => $field) {
+            $name = $prefix === '' ? $key : $prefix . '[' . $key . ']';
+            $type = (string) ($field['type'] ?? 'text');
+            $out .= '<div class="formcon"><div class="yuzde30">'
+                . htmlspecialchars((string) ($field['name'] ?? $key), ENT_QUOTES) . '</div><div class="yuzde70">';
+
+            if ($type === 'dropdown') {
+                $out .= '<select name="' . htmlspecialchars($name, ENT_QUOTES) . '">';
+                foreach ((array) ($field['options'] ?? []) as $value => $label) {
+                    $out .= '<option value="' . htmlspecialchars((string) $value, ENT_QUOTES) . '">'
+                        . htmlspecialchars((string) $label, ENT_QUOTES) . '</option>';
+                }
+                $out .= '</select>';
+            } else {
+                $out .= '<input name="' . htmlspecialchars($name, ENT_QUOTES) . '" type="text" value="'
+                    . htmlspecialchars((string) ($field['value'] ?? ''), ENT_QUOTES) . '">';
+            }
+
+            if (trim((string) ($field['description'] ?? '')) !== '') {
+                $out .= '<span class="kinfo">' . htmlspecialchars((string) $field['description'], ENT_QUOTES) . '</span>';
+            }
+
+            $out .= '</div></div>';
+        }
+
+        echo $out;
+
+        return $out;
+    }
+
+    /** The admin buttons, rendered; the keys are what matters. */
+    public function adminArea_buttons_output(): string
+    {
+        if (! method_exists($this, 'adminArea_buttons')) {
+            return '';
+        }
+
+        $out = '';
+        foreach ($this->adminArea_buttons() as $key => $button) {
+            $out .= '<a data-key="' . htmlspecialchars((string) $key, ENT_QUOTES) . '">'
+                . htmlspecialchars((string) ($button['text'] ?? ''), ENT_QUOTES) . '</a>';
+        }
+
+        return $out;
+    }
+
     /** WISECP 3's own username generator; where it exists, it decides. */
     public function generate_username(string $domain = ''): string
     {
