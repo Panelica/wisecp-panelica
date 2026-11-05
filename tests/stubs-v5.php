@@ -60,7 +60,12 @@ class ServerModule
     public function __construct($server = [], $options = [])
     {
         $this->options = $options ?: [];
-        $this->lang = include __DIR__ . '/../coremio/modules/Servers/Panelica/lang/en.php';
+        // The module's own strings. PNL_MODULE_DIR lets the live harness point
+        // this at an installed module, where the repository layout does not
+        // exist; a missing file leaves the strings empty rather than assigning
+        // include()'s false to an array property.
+        $langFile = (getenv('PNL_MODULE_DIR') ?: __DIR__ . '/../coremio/modules/Servers/Panelica') . '/lang/en.php';
+        $this->lang = is_file($langFile) ? (array) include $langFile : [];
         $this->generation = 5;
 
         if ($server) {

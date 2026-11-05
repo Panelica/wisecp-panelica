@@ -196,6 +196,18 @@ trait PanelicaCore
     {
         $this->api->get('/v1/plans');
 
+        // The call worked, so this is not a failure - but if it only worked
+        // with the certificate check off, the operator is entitled to know
+        // that the panel is not proven to be the one they think it is. The
+        // module log is where they look after pressing Test Connection.
+        if ($this->api->certificateWasNotVerified()) {
+            $this->logCall('test_connect', ['host' => $this->panelHost()], [
+                'connected' => true,
+                'certificate' => 'not verified - the panel answered only with the certificate check off',
+                'advice' => 'install a certificate for ' . $this->panelHost() . ' and enter that hostname here',
+            ]);
+        }
+
         return true;
     }
 

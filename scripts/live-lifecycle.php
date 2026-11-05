@@ -29,11 +29,15 @@ declare(strict_types=1);
 $root = dirname(__DIR__);
 $generation = getenv('WISECP_GENERATION') ?: '5';
 
+// PNL_MODULE_DIR points this at a module that is already installed somewhere
+// else - a real WISECP's modules/Servers/Panelica - so what is exercised is the
+// copy that will actually run, on that machine's own PHP, and not a second one.
+$module = getenv('PNL_MODULE_DIR') ?: $root . '/coremio/modules/Servers/Panelica';
+
 require_once $root . '/tests/stubs-common.php';
 require_once $root . '/tests/stubs-v' . $generation . '.php';
-require_once $root . '/coremio/modules/Servers/Panelica/PanelicaApi.php';
-require_once $root . '/coremio/modules/Servers/Panelica/PanelicaCore.php';
-require_once $root . '/coremio/modules/Servers/Panelica/Panelica.php';
+// The module file requires its own parts, the way WISECP loads it.
+require_once $module . '/Panelica.php';
 
 $key = getenv('PNL_KEY');
 $secret = getenv('PNL_SECRET');
@@ -46,16 +50,24 @@ if (! $key || ! $secret || ! $plan || ! $domain) {
     exit(2);
 }
 
+// PNL_HOST and PNL_PORT point at the panel. The default is the local rewrite
+// proxy (live-rewrite-proxy.php), which is how a development panel with a
+// self-signed certificate is reached; against a real panel, give its hostname
+// and 8443 - the hostname its certificate covers, not an IP.
+$host = getenv('PNL_HOST') ?: '127.0.0.1';
+$port = (int) (getenv('PNL_PORT') ?: 8899);
+
 $server = [
     'id' => 1,
-    'hostname' => '127.0.0.1',
-    'ip' => '127.0.0.1',
-    'port' => 8899,
-    'secure' => false,          // the local rewrite proxy; see proxy.php
+    'hostname' => $host,
+    'name' => $host,
+    'ip' => $host,
+    'port' => $port,
+    'secure' => $port !== 8899,
     'password' => $key,
     'access_hash' => $secret,
-    'ns1' => 'ns1.panelica.local',
-    'ns2' => 'ns2.panelica.local',
+    'ns1' => getenv('PNL_NS1') ?: 'ns1.' . $host,
+    'ns2' => getenv('PNL_NS2') ?: 'ns2.' . $host,
 ];
 
 $options = ['plan_id' => $plan, 'account_role' => 'USER'];

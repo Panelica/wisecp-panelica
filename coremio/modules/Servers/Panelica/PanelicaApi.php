@@ -33,4 +33,7 @@ interface PanelicaApi
 
     /** Whether the last answer carried this status. */
     public function lastStatusWas(int $status): bool;
+
+    /** True when the panel answered only with the certificate check off. */
+    public function certificateWasNotVerified(): bool;
 }

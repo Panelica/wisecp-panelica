@@ -79,6 +79,14 @@ final class FakeApi implements PanelicaApi
         return $this->lastStatus === $status;
     }
 
+    /** A test says so; the fake has no certificate of its own. */
+    public bool $certificateUnverified = false;
+
+    public function certificateWasNotVerified(): bool
+    {
+        return $this->certificateUnverified;
+    }
+
     /** Was this call made, with this body if one is given? */
     public function made(string $method, string $path, ?array $body = null): bool
     {

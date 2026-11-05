@@ -17,6 +17,9 @@ final class ApiClient implements PanelicaApi
     /** The HTTP status of the last answer, so a caller can tell 404 from a real failure. */
     private int $lastStatus = 0;
 
+    /** Whether the last call only went through with the certificate check off. */
+    private bool $certificateUnverified = false;
+
     public function __construct(array $server, callable $logger)
     {
         $host = trim((string) ($server['hostname'] ?? $server['ip'] ?? ''));
@@ -75,27 +78,23 @@ final class ApiClient implements PanelicaApi
         ];
 
         $requestForLog = ['method' => $method, 'path' => $path, 'body' => $this->redact($body ?? [])];
-        $ch = curl_init($url);
-        if ($ch === false) {
-            throw new RuntimeException('Panelica API isteği başlatılamadı.');
+        $https = str_starts_with($this->baseUrl, 'https://');
+
+        $this->certificateUnverified = false;
+        [$raw, $curlError, $curlErrNo, $status] = $this->send($url, $method, $headers, $json, $https);
+
+        // A panel still on its self-signed certificate would otherwise be
+        // unreachable, and no message inside WISECP can fix a certificate. So
+        // the certificate is checked first and, only when that is what failed,
+        // the call is made once more without the check and the module
+        // remembers that it had to - the connection test says so, rather than
+        // the operator being told everything is fine. Same behaviour as the
+        // WHMCS module, including the list of TLS error numbers.
+        if ($curlErrNo !== 0 && $https && in_array($curlErrNo, [35, 51, 58, 60, 77, 83, 90, 91], true)) {
+            $this->certificateUnverified = true;
+            [$raw, $curlError, $curlErrNo, $status] = $this->send($url, $method, $headers, $json, false);
         }
 
-        curl_setopt_array($ch, [
-            CURLOPT_CUSTOMREQUEST => $method,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 60,
-            CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_SSL_VERIFYPEER => $this->baseUrl !== '' && str_starts_with($this->baseUrl, 'https://'),
-            CURLOPT_SSL_VERIFYHOST => str_starts_with($this->baseUrl, 'https://') ? 2 : 0,
-            CURLOPT_POSTFIELDS => $json !== '' ? $json : null,
-        ]);
-
-        $raw = curl_exec($ch);
-        $curlError = curl_error($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
         $this->lastStatus = $status;
 
         if ($raw === false) {
@@ -164,6 +163,52 @@ final class ApiClient implements PanelicaApi
     public function lastStatusWas(int $status): bool
     {
         return $this->lastStatus === $status;
+    }
+
+    /**
+     * True when the panel answered, but only with the certificate check off.
+     *
+     * The call succeeded; what the operator loses is the assurance that the
+     * panel is the one they think it is, so the connection test reports it
+     * instead of staying quiet about it.
+     */
+    public function certificateWasNotVerified(): bool
+    {
+        return $this->certificateUnverified;
+    }
+
+    /**
+     * One request, with the certificate either checked or not.
+     *
+     * @param list<string> $headers
+     * @return array{0:string|false,1:string,2:int,3:int}
+     */
+    private function send(string $url, string $method, array $headers, string $json, bool $verify): array
+    {
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new RuntimeException('Panelica API isteği başlatılamadı.');
+        }
+
+        curl_setopt_array($ch, [
+            CURLOPT_CUSTOMREQUEST => $method,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT => 60,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_SSL_VERIFYPEER => $verify,
+            CURLOPT_SSL_VERIFYHOST => $verify ? 2 : 0,
+            CURLOPT_POSTFIELDS => $json !== '' ? $json : null,
+        ]);
+
+        $raw = curl_exec($ch);
+        $error = curl_error($ch);
+        $errNo = curl_errno($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+
+        return [$raw, $error, $errNo, $status];
     }
 
     /**

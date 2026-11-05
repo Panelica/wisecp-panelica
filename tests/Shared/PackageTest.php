@@ -93,6 +93,30 @@ final class PackageTest extends ModuleTestCase
         $this->assertTrue($this->api->made('GET', '/v1/plans'));
     }
 
+    public function test_a_connection_that_only_worked_unverified_says_so_in_the_log(): void
+    {
+        $this->module();
+        $this->api->answer('GET', '/v1/plans', [['id' => 'plan-a', 'name' => 'Starter']]);
+        $this->api->certificateUnverified = true;
+
+        // It connected, so this is not a failure - but a panel that could not
+        // be proven to be the right one must not pass silently.
+        $this->assertTrue($this->testConnection());
+
+        $logged = implode(' ', array_column($this->logs(), 'response'));
+        $this->assertStringContainsString('not verified', $logged);
+        $this->assertStringContainsString('panel.example.test', $logged);
+    }
+
+    public function test_a_verified_connection_says_nothing_extra(): void
+    {
+        $this->module();
+        $this->api->answer('GET', '/v1/plans', [['id' => 'plan-a', 'name' => 'Starter']]);
+
+        $this->assertTrue($this->testConnection());
+        $this->assertStringNotContainsString('not verified', implode(' ', array_column($this->logs(), 'response')));
+    }
+
     public function test_a_wrong_key_fails_the_connection_test(): void
     {
         $this->module();

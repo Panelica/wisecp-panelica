@@ -70,7 +70,12 @@ class ServerModule
     public function __construct($server = [], $options = [])
     {
         $this->options = $options ?: [];
-        $this->lang = include __DIR__ . '/../coremio/modules/Servers/Panelica/lang/en.php';
+        // The module's own strings. PNL_MODULE_DIR lets the live harness point
+        // this at an installed module, where the repository layout does not
+        // exist; a missing file leaves the strings empty rather than assigning
+        // include()'s false to an array property.
+        $langFile = (getenv('PNL_MODULE_DIR') ?: __DIR__ . '/../coremio/modules/Servers/Panelica') . '/lang/en.php';
+        $this->lang = is_file($langFile) ? (array) include $langFile : [];
         // WISECP's own strings, which the module falls back on for the client area.
         $this->lang['turn-back'] = 'Turn back';
 
@@ -121,7 +126,8 @@ class ServerModule
      */
     public function get_page(string $page_file = '', array $vars = []): string
     {
-        $file = __DIR__ . '/../coremio/modules/Servers/Panelica/pages/' . $page_file . '.php';
+        $dir = getenv('PNL_MODULE_DIR') ?: __DIR__ . '/../coremio/modules/Servers/Panelica';
+        $file = $dir . '/pages/' . $page_file . '.php';
 
         if (! is_file($file)) {
             return '';

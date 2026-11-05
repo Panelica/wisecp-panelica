@@ -29,12 +29,19 @@ open the account and its domain, read it back, the gauges, suspend, unsuspend,
 change the password, move the plan, the service form, a one-time panel login,
 and delete, with nothing left behind on the panel afterwards.
 
-The module is also **installed on a real WISECP 3.1.9.8.2 install** and loads
-there: the class resolves, it instantiates, and all eighteen verbs that
-generation calls are present, measured with that server's own PHP 8.2.35.
-**WISECP itself has not yet driven it** - adding the server and placing an
-order needs an API key on the panel it talks to - so the module is unreleased
-and this repository is private until that is done.
+The module is also **installed on a real WISECP 3.1.9.8.2 install**, and the
+whole lifecycle has been run there - on that server, with its own PHP 8.2.35,
+against that operator's own Panelica over HTTPS with their own API key:
+connect, the plan list, open the account and its domain, the disk and traffic
+gauges, the client area page rendered from `pages/`, suspend, unsuspend,
+change the password, move the plan, the service form, a one-time panel login,
+the account list, and delete - with nothing left behind on the panel
+afterwards.
+
+**WISECP itself has still not driven it.** Defining the server, binding a
+product to it and letting an order run through the queue is the operator's own
+screen, and that is the last unproven step. The module is unreleased and this
+repository is private until it is done.
 
 ### What the real install corrected
 
@@ -102,13 +109,21 @@ invisible to a test that fakes the answer:
   `buyer+wisecp<service>@example.com`, which still reaches the same inbox. This
   is the same fix, and the same reasoning, as in `whmcs-panelica`.
 
-### The panel's certificate has to be one the WISECP server trusts
+### The panel's certificate
 
-The module verifies TLS, as it should, and it does not offer a switch to turn
-that off. So the panel needs a certificate the WISECP server trusts, and the
-server form needs the **hostname that certificate covers** - not the IP
-address, which a certificate almost never covers. A panel still on its
-self-signed certificate will refuse to connect until it has a real one.
+The module checks the panel's certificate first. If that check is what failed -
+and only then - it makes the same call once more without it and remembers that
+it had to: the connection test writes a line into the module log saying the
+panel answered but could not be proven to be the right one, with the hostname
+to get a certificate for. The call is not silently downgraded and the operator
+is not silently reassured.
+
+This is the same behaviour as `whmcs-panelica`, down to the list of TLS error
+numbers, and it is there because a panel still on its self-signed certificate
+would otherwise be unreachable and no message inside WISECP can fix a
+certificate. What it is not is a reason to leave one in place: enter the
+**hostname the certificate covers** on the server form - not the IP address,
+which a certificate almost never covers - and the check passes.
 
 ## Two generations
 
