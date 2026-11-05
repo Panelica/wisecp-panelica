@@ -25,8 +25,9 @@ final class ClientAreaTest extends ModuleTestCase
         $this->module();
         $this->api->answer('GET', '/v1/accounts', [['id' => 'acc-1', 'username' => 'customer']])
             ->answer('GET', '/v1/accounts/acc-1', ['username' => 'customer', 'status' => 'active', 'plan' => ['name' => 'Starter']])
-            ->answer('GET', '/v1/resource-quota/users/acc-1', ['disk_used_mb' => 512.0, 'disk_limit_mb' => 5120.0])
-            ->answer('GET', '/v1/bandwidth/accounts/acc-1', ['used_mb' => 1024.0, 'limit_mb' => 0]);
+            ->answer('GET', '/v1/accounts/acc-1/disk-usage', ['used_mb' => 512.0, 'quota_mb' => 5120.0])
+            ->answer('GET', '/v1/bandwidth/accounts/acc-1', ['bytes_used' => 1024 * 1048576, 'bytes_total' => 0])
+            ->answer('GET', '/v1/resource-quota/users/acc-1', ['bandwidth_quota_bytes' => 0]);
 
         return $this->module->clientArea();
     }
@@ -66,7 +67,7 @@ final class ClientAreaTest extends ModuleTestCase
         $this->module([], ['domain' => '<script>alert(1)</script>.test']);
         $this->api->answer('GET', '/v1/accounts', [['id' => 'acc-1', 'username' => 'customer']])
             ->answer('GET', '/v1/accounts/acc-1', ['username' => '<b>x</b>', 'status' => 'active'])
-            ->answer('GET', '/v1/resource-quota/users/acc-1', [])
+            ->answer('GET', '/v1/accounts/acc-1/disk-usage', [])
             ->answer('GET', '/v1/bandwidth/accounts/acc-1', []);
 
         $page = $this->module->clientArea();
@@ -115,7 +116,7 @@ final class ClientAreaTest extends ModuleTestCase
     {
         $this->module();
         $this->api->answer('GET', '/v1/accounts', [['id' => 'acc-1', 'username' => 'customer']])
-            ->answer('POST', '/v1/accounts/acc-1/sso', ['url' => 'https://panel.example.test:8443/sso?token=abc']);
+            ->answer('POST', '/v1/accounts/acc-1/sso-login', ['url' => 'https://panel.example.test:8443/sso?token=abc']);
 
         $this->assertTrue($this->module->use_clientArea_SingleSignOn());
         $this->assertSame(['https://panel.example.test:8443/sso?token=abc'], Utility::$redirects);
@@ -125,7 +126,7 @@ final class ClientAreaTest extends ModuleTestCase
     {
         $this->module();
         $this->api->answer('GET', '/v1/accounts', [['id' => 'acc-1', 'username' => 'customer']])
-            ->answer('POST', '/v1/accounts/acc-1/sso', new Exception('single sign on is off'), 403);
+            ->answer('POST', '/v1/accounts/acc-1/sso-login', new Exception('single sign on is off'), 403);
 
         ob_start();
         $result = $this->module->use_clientArea_SingleSignOn();
@@ -146,13 +147,15 @@ final class ClientAreaTest extends ModuleTestCase
         $this->assertSame(['https://webmail.customer.test'], Utility::$redirects);
     }
 
-    public function test_the_operators_panel_login_is_a_different_door(): void
+    public function test_there_is_no_operator_panel_login_because_the_api_has_no_such_door(): void
     {
         $this->module();
-        $this->api->answer('POST', '/v1/sso/root', ['url' => 'https://panel.example.test:8443/sso?token=root']);
 
-        $this->assertTrue($this->module->use_adminArea_root_SingleSignOn());
-        $this->assertSame(['https://panel.example.test:8443/sso?token=root'], Utility::$redirects);
-        $this->assertSame(0, $this->api->timesCalled('GET', '/v1/accounts'), 'it never passes through a customer account');
+        // Panelica's External API offers a one-time login for an account and
+        // nothing for the panel's own operator. A declared button with no
+        // endpoint behind it fails in front of whoever presses it, so the name
+        // this host would call is deliberately absent.
+        $this->assertFalse(method_exists($this->module, 'use_adminArea_root_SingleSignOn'));
+        $this->assertFalse(method_exists($this->module, 'sso_root_panel_login'));
     }
 }

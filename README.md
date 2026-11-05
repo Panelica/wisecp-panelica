@@ -22,9 +22,50 @@ do for [whmcs-panelica](https://github.com/Panelica/whmcs-panelica).
 
 ## State
 
-Everything below is written and covered by tests that run on both generations.
-**Nothing has yet been run against a real WISECP installation**, so the module
-is unreleased and this repository is private until it has been.
+Everything below is written and covered by tests that run on both generations,
+and the whole lifecycle has been run against a **live Panelica** with the real
+API client - no fake anywhere - on both generations: connect, the plan list,
+open the account and its domain, read it back, the gauges, suspend, unsuspend,
+change the password, move the plan, the service form, a one-time panel login,
+and delete, with nothing left behind on the panel afterwards.
+
+**It has not yet been run inside a real WISECP installation.** Both hosts are
+stood in by stand-ins built from WISECP's own sample modules and developer
+documentation, so what is proven is that the module calls the right names and
+the panel accepts what it sends. The module is unreleased and this repository
+is private until a real WISECP has run it.
+
+### What the live run found that no faked test could
+
+Three faults, each of them a wrong guess about what an endpoint wants, and each
+invisible to a test that fakes the answer:
+
+- `POST /v1/domains` wants **`name`**. `domain_name` was refused with "Field
+  validation for 'Name' failed on the required tag", so **every order failed
+  after its account had already been opened** - and because the account's id
+  had not been stored yet, the cancellation that followed found nothing to
+  delete and reported success. An account left open on the panel that nothing
+  in WISECP could reach again: the same shape as the delete fault the module
+  was reported for. The id is now kept the moment the account exists, a retry
+  reuses the account and sees to the domain, and a domain the account already
+  has is not added twice.
+- `POST /v1/accounts/{id}/change-password` wants **`new_password`**.
+  `password` was refused with "Invalid Request Body".
+- The panel keeps **one account per email address**, and WISECP hands the same
+  buyer's address to every service they order. A customer's second hosting
+  package could not be provisioned at all: "Failed to create -
+  apiErrors.users.emailAlreadyExists", for an order that had been paid for. The
+  first account keeps the plain address; a later one gets
+  `buyer+wisecp<service>@example.com`, which still reaches the same inbox. This
+  is the same fix, and the same reasoning, as in `whmcs-panelica`.
+
+### The panel's certificate has to be one the WISECP server trusts
+
+The module verifies TLS, as it should, and it does not offer a switch to turn
+that off. A Panelica whose panel still has its self-signed certificate will
+therefore refuse to connect, and no error inside WISECP can make that clearer
+than it is: install a real certificate for the panel's hostname, and enter that
+hostname on the server form rather than the IP address.
 
 ## Two generations
 
@@ -149,6 +190,20 @@ Then add the server in the admin panel, under Products → Hosting → Servers:
 Press Test Connection. It reads the plan list, which needs the key, the secret
 and the clock to all be right, and reads nothing else.
 
+The key's scopes, as the External API requires them:
+
+| Scope | What needs it |
+| --- | --- |
+| `plans:read` | the plan list, and the connection test |
+| `accounts:read` | reading the account, its disk usage, the account list |
+| `accounts:write` | opening, suspending, moving and deleting an account |
+| `domains:write` | the account's domain |
+| `bandwidth:read` | the traffic gauge |
+| `*:*` | **only** for the one-time panel login, which the API restricts to a full-access key |
+
+A key without `*:*` works for everything except the panel button; the button
+then reports that the panel refused it rather than failing silently.
+
 Then set the plan on the product, under its Module tab.
 
 ## Tests
@@ -163,6 +218,12 @@ composer test          # both generations, one run each
 composer test:v5       # the shared behaviour and the WISECP 5 verbs
 composer test:v3       # the shared behaviour and the WISECP 3 verbs
 ```
+
+There is also a live harness, which is not part of the suite and needs a
+running panel: `tests/` fakes the API to prove the module's decisions, while
+`scripts/live-lifecycle.php` runs the real client against a real Panelica to
+prove the endpoints. The three faults above came from the second kind, and the
+first kind now holds them so they cannot come back.
 
 A PHP process can define `ServerModule` only once, so one run is one host:
 `tests/stubs-v5.php` and `tests/stubs-v3.php` are the two stand-ins, and

@@ -35,6 +35,9 @@ trait PanelicaCore
     /** The id looked up from the username, for the rest of this call. */
     private ?string $resolvedAccountId = null;
 
+    /** What was last handed to the host to store, so it is not stored twice. */
+    private ?string $lastStoredPassword = null;
+
     /**
      * A property only one generation declares.
      *
@@ -94,9 +97,19 @@ trait PanelicaCore
         }
     }
 
-    /** Keep the account's id where the next call will find it. */
+    /**
+     * Keep the account's id where the next call will find it.
+     *
+     * Idempotent: asking twice for the same id stores once. The id is kept the
+     * moment the account exists and again when the account is handed back, and
+     * only one of those is ever a change.
+     */
     private function rememberAccountId(string $id): void
     {
+        if (($this->options[self::ACCOUNT_ID] ?? null) === $id) {
+            return;
+        }
+
         $this->options[self::ACCOUNT_ID] = $id;
 
         if ($this->hostStoresOptions()) {
@@ -106,8 +119,15 @@ trait PanelicaCore
         // id travels in the return value instead.
     }
 
+    /** Idempotent for the same reason as rememberAccountId(). */
     private function rememberPassword(string $password): void
     {
+        if ($this->lastStoredPassword === $password) {
+            return;
+        }
+
+        $this->lastStoredPassword = $password;
+
         if ($this->hostStoresPassword()) {
             $this->save_login_password($password);
         }
@@ -212,12 +232,21 @@ trait PanelicaCore
 
         $existing = $this->findAccount($username);
         if ($existing !== null) {
-            // A retry after a half-finished order: hand back what the service
-            // needs instead of failing on a duplicate.
-            return $this->accountResult((string) $existing['id'], (string) ($existing['username'] ?? $username), $password, $domain);
+            // A retry after a half-finished order. Handing back what the
+            // service needs is only half of it: the order may have failed
+            // exactly because the domain was refused, so the domain is seen to
+            // as well, or the retry would report success on a service with no
+            // website.
+            $id = (string) $existing['id'];
+            $username = (string) ($existing['username'] ?? $username);
+
+            $this->rememberAccountId($id);
+            $this->addDomain($id, $domain, $username);
+
+            return $this->accountResult($id, $username, $password, $domain);
         }
 
-        $account = $this->api->post('/v1/accounts', [
+        $body = [
             'username' => $username,
             'email' => $this->email($domain, $options),
             'password' => $password,
@@ -225,7 +254,25 @@ trait PanelicaCore
             'role' => $this->role($options),
             'plan_id' => $this->planId($options),
             'auto_username' => true,
-        ]);
+        ];
+
+        try {
+            $account = $this->api->post('/v1/accounts', $body);
+        } catch (Exception $e) {
+            // The panel keeps one account per address. A customer's second
+            // order carries the same address as their first, so without this
+            // the second service cannot be provisioned at all - measured on a
+            // live panel: "Failed to create - apiErrors.users.emailAlreadyExists"
+            // for an order that had been paid for.
+            $tagged = $this->taggedEmail($body['email'], $e);
+
+            if ($tagged === null) {
+                throw $e;
+            }
+
+            $body['email'] = $tagged;
+            $account = $this->api->post('/v1/accounts', $body);
+        }
 
         $id = (string) ($account['id'] ?? '');
         if ($id === '') {
@@ -235,11 +282,57 @@ trait PanelicaCore
         // auto_username: the panel may have made the name free and readable.
         $username = (string) ($account['username'] ?? $username);
 
-        if ($domain !== '') {
-            $this->api->post('/v1/domains', ['user_id' => $id, 'domain_name' => $domain]);
-        }
+        // Stored here, before the domain, and not at the end of this method.
+        // The account exists from this line on, and anything that fails after
+        // it must still leave something to act on: measured on a live panel,
+        // a domain the panel refused meant create() reported a failure, the id
+        // never reached WISECP, and the cancellation that followed found
+        // nothing to delete and reported success - an account left open on the
+        // panel that nothing in WISECP could reach again.
+        $this->rememberAccountId($id);
+        $this->rememberPassword($password);
+
+        $this->addDomain($id, $domain, $username);
 
         return $this->accountResult($id, $username, $password, $domain);
+    }
+
+    /**
+     * The account's domain, added unless it is already there.
+     *
+     * Asking first is what makes a retry safe: the account may already have the
+     * domain from an attempt that failed later on, and creating it twice would
+     * turn a recoverable order into one that can never finish.
+     */
+    private function addDomain(string $id, string $domain, string $username): void
+    {
+        if ($domain === '') {
+            return;
+        }
+
+        try {
+            foreach ($this->api->get('/v1/accounts/' . $id . '/domains') as $existing) {
+                if (is_array($existing) && strcasecmp((string) ($existing['name'] ?? $existing['domain_name'] ?? ''), $domain) === 0) {
+                    return;
+                }
+            }
+        } catch (Exception) {
+            // Not knowing is not a reason to stop; the create below will say
+            // if the domain is already there.
+        }
+
+        try {
+            // "name", which is what the endpoint calls it. "domain_name" was
+            // refused with "Field validation for 'Name' failed on the required
+            // tag", and no faked test could have known that.
+            $this->api->post('/v1/domains', ['user_id' => $id, 'name' => $domain]);
+        } catch (Exception $e) {
+            // The account stays: a second attempt finds it by its username and
+            // comes back here rather than opening another one.
+            $this->logCall('create', ['account' => $id, 'domain' => $domain], ['error' => $e->getMessage()]);
+
+            throw new Exception($this->text('domain_failed', ['domain' => $domain, 'username' => $username, 'error' => $e->getMessage()]));
+        }
     }
 
     private function suspendAccount(): bool
@@ -284,7 +377,9 @@ trait PanelicaCore
             throw new Exception($this->text('password_required'));
         }
 
-        $this->api->post('/v1/accounts/' . $this->accountId() . '/change-password', ['password' => $password]);
+        // "new_password", which is what the endpoint requires; "password" was
+        // refused with "Invalid Request Body", measured on a live panel.
+        $this->api->post('/v1/accounts/' . $this->accountId() . '/change-password', ['new_password' => $password]);
         $this->rememberPassword($password);
 
         return true;
@@ -343,7 +438,18 @@ trait PanelicaCore
     }
 
     /**
-     * Disk and traffic, each left out when the panel cannot answer for it.
+     * Disk and traffic in megabytes, each left out when the panel cannot answer
+     * for it.
+     *
+     * The two readings come from different places, and each endpoint's own
+     * names are used rather than a guess at a common pattern:
+     *
+     *   disk      GET /v1/accounts/{id}/disk-usage   used_mb, quota_mb
+     *   traffic   GET /v1/bandwidth/accounts/{id}    bytes_used, bytes_total
+     *
+     * The traffic endpoint reports what was counted this month but leaves the
+     * ceiling at zero, so the ceiling is read from the account's quota, where
+     * it is kept as bytes per month.
      *
      * @return array<string,array{used:float,limit:float}>
      */
@@ -357,28 +463,46 @@ trait PanelicaCore
         $out = [];
 
         try {
-            $quota = $this->api->get('/v1/resource-quota/users/' . $id);
-            $used = (float) ($quota['disk_used_mb'] ?? $quota['disk_usage_mb'] ?? 0);
-            $limit = (float) ($quota['disk_limit_mb'] ?? $quota['disk_quota_mb'] ?? 0);
-            if ($used > 0 || $limit > 0) {
-                $out['disk'] = ['used' => $used, 'limit' => $limit];
-            }
+            $disk = $this->api->get('/v1/accounts/' . $id . '/disk-usage');
+            $out['disk'] = [
+                'used' => (float) ($disk['used_mb'] ?? 0),
+                'limit' => (float) ($disk['quota_mb'] ?? 0),
+            ];
         } catch (Exception) {
             // A gauge the panel cannot answer is left off the page rather than
             // taking the page down with it.
         }
 
         try {
-            $bandwidth = $this->api->get('/v1/bandwidth/accounts/' . $id);
-            $used = (float) ($bandwidth['used_mb'] ?? $bandwidth['total_mb'] ?? 0);
-            $limit = (float) ($bandwidth['limit_mb'] ?? 0);
-            if ($used > 0 || $limit > 0) {
-                $out['bandwidth'] = ['used' => $used, 'limit' => $limit];
+            $traffic = $this->api->get('/v1/bandwidth/accounts/' . $id);
+            $out['bandwidth'] = [
+                'used' => (float) ($traffic['bytes_used'] ?? 0) / 1048576,
+                'limit' => (float) ($traffic['bytes_total'] ?? 0) / 1048576,
+            ];
+
+            if ($out['bandwidth']['limit'] <= 0) {
+                $out['bandwidth']['limit'] = $this->trafficCeiling($id);
             }
         } catch (Exception) {
         }
 
         return $out;
+    }
+
+    /**
+     * The account's monthly traffic allowance in megabytes, or zero when it has
+     * none or cannot be read. Never fatal: a missing ceiling only means the
+     * gauge shows no limit.
+     */
+    private function trafficCeiling(string $id): float
+    {
+        try {
+            $quota = $this->api->get('/v1/resource-quota/users/' . $id);
+        } catch (Exception) {
+            return 0.0;
+        }
+
+        return (float) ($quota['bandwidth_quota_bytes'] ?? 0) / 1048576;
     }
 
     // ------------------------------------------------------------- the pieces
@@ -455,6 +579,64 @@ trait PanelicaCore
         ];
     }
 
+    /**
+     * The address to try again with when the panel refused the customer's own
+     * because another account already has it - or null when that is not why it
+     * refused, or there is nothing to tag the address with.
+     *
+     * buyer@example.com on service 77 becomes buyer+wisecp77@example.com, which
+     * still delivers to the same inbox. A tag already on the address is
+     * replaced rather than stacked.
+     */
+    private function taggedEmail(string $email, Exception $refusal): ?string
+    {
+        $service = (int) $this->serviceValue('id');
+
+        if ($service <= 0 || ! str_contains($email, '@')) {
+            return null;
+        }
+
+        $taken = stripos($refusal->getMessage(), 'emailAlreadyExists') !== false;
+
+        if (! $taken) {
+            // Should the panel answer with a translated sentence one day, the
+            // key is gone from the reply, so the account list is asked instead.
+            // This runs only after a refusal, never on the ordinary path.
+            foreach ($this->accountList() as $account) {
+                if (strcasecmp((string) ($account['email'] ?? ''), $email) === 0) {
+                    $taken = true;
+                    break;
+                }
+            }
+        }
+
+        if (! $taken) {
+            return null;
+        }
+
+        $at = strrpos($email, '@');
+        $local = substr($email, 0, $at);
+        $plus = strpos($local, '+');
+
+        if ($plus !== false) {
+            $local = substr($local, 0, $plus);
+        }
+
+        return $local . '+wisecp' . $service . substr($email, $at);
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    private function accountList(): array
+    {
+        try {
+            $accounts = $this->api->get('/v1/accounts');
+        } catch (Exception) {
+            return [];
+        }
+
+        return array_values(array_filter($accounts, 'is_array'));
+    }
+
     /** @return array<string,mixed>|null */
     private function findAccount(string $username): ?array
     {
@@ -462,14 +644,9 @@ trait PanelicaCore
             return null;
         }
 
-        try {
-            $accounts = $this->api->get('/v1/accounts');
-        } catch (Exception) {
-            return null;    // a convenience; its failure must not stop an order
-        }
-
-        foreach ($accounts as $account) {
-            if (is_array($account) && strcasecmp((string) ($account['username'] ?? ''), $username) === 0) {
+        // A convenience; its failure must not stop an order.
+        foreach ($this->accountList() as $account) {
+            if (strcasecmp((string) ($account['username'] ?? ''), $username) === 0) {
                 return $account;
             }
         }

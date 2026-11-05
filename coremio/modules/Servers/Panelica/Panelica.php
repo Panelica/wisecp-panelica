@@ -314,16 +314,16 @@ class Panelica extends ServerModule
      * The panel, opened as the account's own user.
      *
      * This host asks for the URL and sends the customer itself.
+     *
+     * There is deliberately no sso_root_panel_login() beside this: Panelica's
+     * External API offers a one-time login for an account and nothing for the
+     * panel's own operator, and a declared verb with no endpoint behind it is a
+     * button that fails in front of whoever presses it. The operator opens the
+     * panel and signs in.
      */
     public function sso_panel_login(): string
     {
-        return $this->panelLoginUrl('/v1/accounts/' . $this->accountId() . '/sso');
-    }
-
-    /** The panel as its operator, for the administrator only. */
-    public function sso_root_panel_login(): string
-    {
-        return $this->panelLoginUrl('/v1/sso/root');
+        return $this->panelLoginUrl('/v1/accounts/' . $this->accountId() . '/sso-login');
     }
 
     // ============================================================= WISECP 3
@@ -513,7 +513,7 @@ class Panelica extends ServerModule
     /** The panel, opened as the account's own user. */
     public function use_clientArea_SingleSignOn()
     {
-        return $this->openPanel('/v1/accounts/' . $this->accountId() . '/sso');
+        return $this->openPanel('/v1/accounts/' . $this->accountId() . '/sso-login');
     }
 
     /** Webmail, which needs no panel session. */
@@ -528,13 +528,7 @@ class Panelica extends ServerModule
     /** The same panel, opened from the admin side. */
     public function use_adminArea_SingleSignOn()
     {
-        return $this->openPanel('/v1/accounts/' . $this->accountId() . '/sso');
-    }
-
-    /** The panel as its operator, for the administrator only. */
-    public function use_adminArea_root_SingleSignOn()
-    {
-        return $this->openPanel('/v1/sso/root');
+        return $this->openPanel('/v1/accounts/' . $this->accountId() . '/sso-login');
     }
 
     /** Which client-area page WISECP 3 is asking for. */

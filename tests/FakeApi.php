@@ -18,6 +18,12 @@ final class FakeApi implements PanelicaApi
     /** @var array<string,mixed> path => payload, or a callable, or an Exception to throw */
     private array $answers = [];
 
+    /** @var array<string,list<array{payload:mixed,status:int}>> later answers for the same path, in order */
+    private array $repeats = [];
+
+    /** @var array<string,int> how many times each path has been called */
+    private array $seen = [];
+
     /** @var list<array{method:string,path:string,body:array<string,mixed>|null}> */
     public array $calls = [];
 
@@ -26,6 +32,20 @@ final class FakeApi implements PanelicaApi
     public function answer(string $method, string $path, mixed $payload, int $status = 200): self
     {
         $this->answers[strtoupper($method) . ' ' . $path] = ['payload' => $payload, 'status' => $status];
+
+        return $this;
+    }
+
+    /**
+     * The answer for the call after the one already queued for this path.
+     *
+     * A retry is not a repeat: the module asks the same path twice and the
+     * panel answers differently the second time - a refused address, then an
+     * account. Both answers have to be sayable or the retry cannot be tested.
+     */
+    public function answerAgain(string $method, string $path, mixed $payload, int $status = 200): self
+    {
+        $this->repeats[strtoupper($method) . ' ' . $path][] = ['payload' => $payload, 'status' => $status];
 
         return $this;
     }
@@ -89,6 +109,14 @@ final class FakeApi implements PanelicaApi
         }
 
         $answer = $this->answers[$key];
+        $this->seen[$key] = ($this->seen[$key] ?? 0) + 1;
+
+        // The queued answer is for the first call; a repeat is for the ones
+        // after it, in the order they were queued.
+        if ($this->seen[$key] > 1 && ! empty($this->repeats[$key])) {
+            $answer = array_shift($this->repeats[$key]);
+        }
+
         $this->lastStatus = $answer['status'];
 
         if ($answer['payload'] instanceof Exception) {

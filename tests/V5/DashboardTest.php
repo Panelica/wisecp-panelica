@@ -24,8 +24,8 @@ final class DashboardTest extends ModuleTestCase
         $this->module();
         $this->givenAccount('acc-1');
         $this->api->answer('GET', '/v1/accounts/acc-1', ['username' => 'customertest', 'status' => 'active', 'plan' => ['name' => 'Starter']])
-            ->answer('GET', '/v1/resource-quota/users/acc-1', ['disk_used_mb' => 512.0, 'disk_limit_mb' => 5120.0])
-            ->answer('GET', '/v1/bandwidth/accounts/acc-1', ['used_mb' => 1024.0, 'limit_mb' => 102400.0]);
+            ->answer('GET', '/v1/accounts/acc-1/disk-usage', ['used_mb' => 512.0, 'quota_mb' => 5120.0])
+            ->answer('GET', '/v1/bandwidth/accounts/acc-1', ['bytes_used' => 1024 * 1048576, 'bytes_total' => 102400 * 1048576]);
 
         return $this->module->dashboard_data();
     }
@@ -58,7 +58,7 @@ final class DashboardTest extends ModuleTestCase
         $this->module();
         $this->givenAccount('acc-1');
         $this->api->answer('GET', '/v1/accounts/acc-1', ['username' => 'u', 'status' => 'suspended'])
-            ->answer('GET', '/v1/resource-quota/users/acc-1', [])
+            ->answer('GET', '/v1/accounts/acc-1/disk-usage', [])
             ->answer('GET', '/v1/bandwidth/accounts/acc-1', []);
 
         $status = $this->module->dashboard_data()['server_info']['status'];
@@ -82,7 +82,7 @@ final class DashboardTest extends ModuleTestCase
         $this->module();
         $this->givenAccount('acc-1');
         $this->api->answer('GET', '/v1/accounts/acc-1', ['username' => 'u', 'status' => 'active'])
-            ->answer('GET', '/v1/resource-quota/users/acc-1', ['disk_used_mb' => 7.0, 'disk_limit_mb' => 0])
+            ->answer('GET', '/v1/accounts/acc-1/disk-usage', ['used_mb' => 7.0, 'quota_mb' => 0])
             ->answer('GET', '/v1/bandwidth/accounts/acc-1', []);
 
         // A total of zero would otherwise draw a full gauge on an account that
@@ -95,8 +95,8 @@ final class DashboardTest extends ModuleTestCase
         $this->module();
         $this->givenAccount('acc-1');
         $this->api->answer('GET', '/v1/accounts/acc-1', ['username' => 'u', 'status' => 'active'])
-            ->answer('GET', '/v1/resource-quota/users/acc-1', new Exception('quota service is down'), 503)
-            ->answer('GET', '/v1/bandwidth/accounts/acc-1', ['used_mb' => 10.0, 'limit_mb' => 100.0]);
+            ->answer('GET', '/v1/accounts/acc-1/disk-usage', new Exception('quota service is down'), 503)
+            ->answer('GET', '/v1/bandwidth/accounts/acc-1', ['bytes_used' => 10 * 1048576, 'bytes_total' => 100 * 1048576]);
 
         $page = $this->module->dashboard_data();
 
@@ -109,8 +109,8 @@ final class DashboardTest extends ModuleTestCase
     {
         $this->module();
         $this->givenAccount('acc-1');
-        $this->api->answer('GET', '/v1/resource-quota/users/acc-1', ['disk_used_mb' => 512.0, 'disk_limit_mb' => 5120.0])
-            ->answer('GET', '/v1/bandwidth/accounts/acc-1', ['used_mb' => 1024.0, 'limit_mb' => 102400.0]);
+        $this->api->answer('GET', '/v1/accounts/acc-1/disk-usage', ['used_mb' => 512.0, 'quota_mb' => 5120.0])
+            ->answer('GET', '/v1/bandwidth/accounts/acc-1', ['bytes_used' => 1024 * 1048576, 'bytes_total' => 102400 * 1048576]);
 
         $this->assertSame(['disk' => 512.0, 'bandwidth' => 1024.0], $this->module->metrics_usage());
     }

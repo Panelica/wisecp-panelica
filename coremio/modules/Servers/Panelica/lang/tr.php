@@ -21,6 +21,7 @@ return [
     'password_required' => 'Yeni parola gerekli.',
     'no_account_returned' => 'Panel hesabı açtı ama kimlik döndürmedi.',
     'no_account_id' => 'Bu hizmetin henüz Panelica hesabı yok, yapılacak bir şey bulunamadı.',
+    'domain_failed' => ':username hesabi acildi, ancak panel :domain alan adini kabul etmedi; site kurulmadi: :error. create yeniden calistirilirsa ayni hesap kullanilir ve alan adi tekrar denenir.',
 
     // Hizmet sayfası
     'domain' => 'Alan adı',

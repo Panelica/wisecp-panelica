@@ -21,6 +21,7 @@ return [
     'password_required' => 'A new password is needed.',
     'no_account_returned' => 'The panel accepted the account but returned no id.',
     'no_account_id' => 'This service has no Panelica account yet, so there is nothing to act on.',
+    'domain_failed' => 'The account :username was opened, but the panel refused the domain :domain, so the site is not set up: :error. Running create again will reuse the account and try the domain once more.',
 
     // Service page
     'domain' => 'Domain',

@@ -37,7 +37,7 @@ final class LifecycleTest extends ModuleTestCase
         $this->assertTrue($created['auto_username']);
         $this->assertSame('USER', $created['role']);
 
-        $this->assertTrue($this->api->made('POST', '/v1/domains', ['user_id' => 'acc-1', 'domain_name' => 'customer.test']));
+        $this->assertTrue($this->api->made('POST', '/v1/domains', ['user_id' => 'acc-1', 'name' => 'customer.test']));
         $this->assertAccountRemembered('acc-1');
         $this->assertPasswordRemembered($this->createdPassword($result));
     }
@@ -74,11 +74,13 @@ final class LifecycleTest extends ModuleTestCase
     public function test_create_after_a_half_finished_order_does_not_open_a_second_account(): void
     {
         $this->module(['username' => 'chosen']);
-        $this->api->answer('GET', '/v1/accounts', [['id' => 'acc-old', 'username' => 'Chosen']]);
+        $this->api->answer('GET', '/v1/accounts', [['id' => 'acc-old', 'username' => 'Chosen']])
+            ->answer('GET', '/v1/accounts/acc-old/domains', [['name' => 'customer.test']]);
 
         $result = $this->create();
 
         $this->assertSame(0, $this->api->timesCalled('POST', '/v1/accounts'), 'no duplicate account');
+        $this->assertSame(0, $this->api->timesCalled('POST', '/v1/domains'), 'nor a duplicate domain');
 
         // The name the panel actually holds, not the one the order asked for:
         // the service has to carry the account's real spelling or every later
@@ -125,7 +127,7 @@ final class LifecycleTest extends ModuleTestCase
         $this->api->answer('POST', '/v1/accounts/acc-1/change-password', []);
 
         $this->assertTrue($this->module->change_password('New-Pass-9876'));
-        $this->assertTrue($this->api->made('POST', '/v1/accounts/acc-1/change-password', ['password' => 'New-Pass-9876']));
+        $this->assertTrue($this->api->made('POST', '/v1/accounts/acc-1/change-password', ['new_password' => 'New-Pass-9876']));
         $this->assertPasswordRemembered('New-Pass-9876');
     }
 

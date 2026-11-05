@@ -119,7 +119,7 @@ final class HostContractTest extends ModuleTestCase
     {
         $this->module();
         $this->givenAccount('acc-1');
-        $this->api->answer('POST', '/v1/accounts/acc-1/sso', ['url' => 'https://panel.example.test:8443/sso?token=abc']);
+        $this->api->answer('POST', '/v1/accounts/acc-1/sso-login', ['url' => 'https://panel.example.test:8443/sso?token=abc']);
 
         // This host asks for the URL and sends the customer itself, where
         // WISECP 3 expects the module to do the redirect.
@@ -130,20 +130,19 @@ final class HostContractTest extends ModuleTestCase
     {
         $this->module();
         $this->givenAccount('acc-1');
-        $this->api->answer('POST', '/v1/accounts/acc-1/sso', ['token' => 'tok 1+2']);
+        $this->api->answer('POST', '/v1/accounts/acc-1/sso-login', ['token' => 'tok 1+2']);
 
         $this->assertSame('https://panel.example.test:8443/sso?token=tok+1%2B2', $this->module->sso_panel_login());
     }
 
-    public function test_the_operators_own_panel_login_is_a_different_door(): void
+    public function test_there_is_no_operator_panel_login_because_the_api_has_no_such_door(): void
     {
         $this->module();
-        $this->api->answer('POST', '/v1/sso/root', ['url' => 'https://panel.example.test:8443/sso?token=root']);
 
-        // It never passes through the customer's account, so it needs no
-        // account id and cannot leak one customer's session to another.
-        $this->assertSame('https://panel.example.test:8443/sso?token=root', $this->module->sso_root_panel_login());
-        $this->assertSame(0, $this->api->timesCalled('GET', '/v1/accounts'));
+        // The External API's one-time login is per account; there is nothing
+        // for the panel's own operator. A verb with no endpoint behind it is a
+        // button that fails in front of whoever presses it.
+        $this->assertFalse(method_exists($this->module, 'sso_root_panel_login'));
     }
 
     public function test_a_renewal_needs_nothing_on_the_panel_but_still_answers(): void

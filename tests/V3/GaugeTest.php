@@ -17,18 +17,28 @@ use Panelica\Wisecp\Tests\ModuleTestCase;
  */
 final class GaugeTest extends ModuleTestCase
 {
-    private function withUsage(mixed $disk, mixed $bandwidth): void
+    /**
+     * @param mixed $disk what /v1/accounts/{id}/disk-usage answers
+     * @param mixed $traffic what /v1/bandwidth/accounts/{id} answers
+     */
+    private function withUsage(mixed $disk, mixed $traffic): void
     {
         $this->module();
         $this->api->answer('GET', '/v1/accounts', [['id' => 'acc-1', 'username' => 'customer']]);
 
-        $this->api->answer('GET', '/v1/resource-quota/users/acc-1', $disk);
-        $this->api->answer('GET', '/v1/bandwidth/accounts/acc-1', $bandwidth);
+        $this->api->answer('GET', '/v1/accounts/acc-1/disk-usage', $disk);
+        $this->api->answer('GET', '/v1/bandwidth/accounts/acc-1', $traffic);
+    }
+
+    /** Megabytes, as the traffic endpoint reports them: bytes. */
+    private static function mb(float $value): int
+    {
+        return (int) ($value * 1048576);
     }
 
     public function test_disk_comes_back_formatted_with_its_percentage(): void
     {
-        $this->withUsage(['disk_used_mb' => 512.0, 'disk_limit_mb' => 5120.0], []);
+        $this->withUsage(['used_mb' => 512.0, 'quota_mb' => 5120.0], []);
 
         $this->assertSame([
             'limit' => 5120.0,
@@ -41,7 +51,7 @@ final class GaugeTest extends ModuleTestCase
 
     public function test_traffic_is_labelled_in_the_unit_this_host_expects(): void
     {
-        $this->withUsage([], ['used_mb' => 2048.0, 'limit_mb' => 102400.0]);
+        $this->withUsage(['used_mb' => 0, 'quota_mb' => 0], ['bytes_used' => self::mb(2048), 'bytes_total' => self::mb(102400)]);
 
         // The panel counts in megabytes and this gauge is a gigabyte one, so
         // the number is converted with the label rather than only relabelled.
@@ -56,7 +66,7 @@ final class GaugeTest extends ModuleTestCase
 
     public function test_no_limit_is_drawn_as_the_infinity_sign(): void
     {
-        $this->withUsage(['disk_used_mb' => 7.5, 'disk_limit_mb' => 0], []);
+        $this->withUsage(['used_mb' => 7.5, 'quota_mb' => 0], []);
 
         $gauge = $this->module->getDisk();
 
@@ -68,14 +78,14 @@ final class GaugeTest extends ModuleTestCase
 
     public function test_a_gauge_over_its_limit_stops_at_a_hundred(): void
     {
-        $this->withUsage(['disk_used_mb' => 6000.0, 'disk_limit_mb' => 5120.0], []);
+        $this->withUsage(['used_mb' => 6000.0, 'quota_mb' => 5120.0], []);
 
         $this->assertSame(100, $this->module->getDisk()['used-percent']);
     }
 
     public function test_a_gauge_the_panel_cannot_answer_is_no_gauge_rather_than_a_wrong_one(): void
     {
-        $this->withUsage(new Exception('quota service is down'), ['used_mb' => 10.0, 'limit_mb' => 100.0]);
+        $this->withUsage(new Exception('quota service is down'), ['bytes_used' => self::mb(10), 'bytes_total' => self::mb(100)]);
 
         // This host reads false as "this gauge has no value" and draws nothing;
         // zeroes would read as an empty disk, which is a different claim.

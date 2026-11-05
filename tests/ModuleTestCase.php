@@ -115,6 +115,23 @@ abstract class ModuleTestCase extends TestCase
         $this->module->options['panelica_account_id'] = $id;
     }
 
+    /**
+     * The username this host would give an account for this domain.
+     *
+     * Each generation ships its own generator and the module defers to it, so
+     * the name is not the same on both: WISECP 3's shortens, and the module
+     * falls back to its own derivation only where there is no generator. A test
+     * that hard-codes one name is really testing one host.
+     */
+    protected function expectedUsername(string $domain = 'customer.test'): string
+    {
+        if (method_exists($this->module, 'generate_username')) {
+            return str_replace('-', '', $this->module->generate_username($domain));
+        }
+
+        return substr((string) preg_replace('/[^a-z0-9]/', '', strtolower($domain)), 0, 16);
+    }
+
     // ------------------------------------------------- the verbs, by host name
 
     /** @param array<string,mixed> $order_options */
