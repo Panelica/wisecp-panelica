@@ -1,15 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The module is tested on both WISECP generations.
+
+  A PHP process can define ServerModule only once, so one run is one host:
+  WISECP_GENERATION picks which stand-in the bootstrap loads, and the suite is
+  run twice. Shared carries the behaviour both hosts must show and runs in both
+  runs; V3 and V5 carry what is true of one host only, and each is selected with
+  its own run. Running everything in one go would load one host and silently
+  skip the other generation's verbs - see composer.json's "test".
+-->
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
          bootstrap="tests/bootstrap.php"
          colors="true"
          failOnWarning="true"
          failOnRisky="true"
+         failOnNotice="true"
+         failOnDeprecation="true"
 >
     <testsuites>
-        <!-- The module, with WISECP imitated (tests/stubs.php) and the Panelica API faked. -->
-        <testsuite name="module">
-            <directory>tests</directory>
+        <!-- Behaviour both generations must show; run under each. -->
+        <testsuite name="shared">
+            <directory>tests/Shared</directory>
+        </testsuite>
+        <!-- WISECP 3 only: its verb names, its storage, its failure contract. -->
+        <testsuite name="v3">
+            <directory>tests/V3</directory>
+        </testsuite>
+        <!-- WISECP 5 only. -->
+        <testsuite name="v5">
+            <directory>tests/V5</directory>
         </testsuite>
     </testsuites>
     <source>

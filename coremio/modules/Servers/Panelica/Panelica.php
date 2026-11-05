@@ -10,24 +10,35 @@ use ServerModule;
 /*
  * Panelica hosting accounts, driven from WISECP.
  *
- * The core calls the verbs below by name; a name it does not know is never
- * called. The first version of this module carried two generations of names at
- * once - testConnect() beside test_connect(), terminate() and removeAccount()
- * beside cancel(), apply_updowngrade() and change_plan() beside upgrade(),
- * clientArea_home() and client_area_data() beside dashboard_data() - so for
- * every job one name was read and the other sat unused. That is why the client
- * area showed nothing and deleting an account in WISECP left it standing on the
- * panel. There is one generation here, the current one.
+ * WISECP asks for its work by calling a method by name, and it only ever calls
+ * a name its own version knows. There are two such vocabularies in the field:
  *
- * Failure is reported by throwing: WISECP catches it, writes it to the module
- * log and shows it. Returning false says "done, nothing to do".
+ *   job                WISECP 3                 WISECP 5
+ *   test the server    testConnect()            test_connect()
+ *   the package form   config_options()         product_configuration()
+ *   delete             terminate()              cancel()
+ *   move plan          apply_updowngrade()      upgrade()
+ *   what the customer  clientArea() + pages/    dashboard_data()
+ *     sees
+ *   usage              getDisk()/getBandwidth() metrics_usage()
+ *
+ * A module that carries only one vocabulary is silent on the other host: the
+ * client area shows nothing, deleting in WISECP leaves the account standing on
+ * the panel, and no error is raised anywhere, because nothing was called. So
+ * both vocabularies are here, each a few lines, and both hand the work to
+ * PanelicaCore - which is written once and tested once, on both hosts.
+ *
+ * The generations also disagree on how a failure is reported, and this is not
+ * cosmetic: WISECP 3 reads $this->error and a false return, WISECP 5 catches
+ * the exception. So every WISECP 3 verb catches and converts; every WISECP 5
+ * verb lets it through.
  */
 class Panelica extends ServerModule
 {
+    use PanelicaCore;
+
     /** Where the account's id on the panel is kept between calls. */
     private const ACCOUNT_ID = 'panelica_account_id';
-
-    protected PanelicaApi $api;
 
     /**
      * @param array<string,mixed>|int $server
@@ -35,7 +46,7 @@ class Panelica extends ServerModule
      */
     public function __construct($server = [], $options = [])
     {
-        $this->_name = __CLASS__;
+        $this->_name = 'Panelica';
         parent::__construct($server, $options);
     }
 
@@ -50,9 +61,112 @@ class Panelica extends ServerModule
         include_once __DIR__ . DIRECTORY_SEPARATOR . 'ApiClient.php';
 
         $this->api = new ApiClient($server, function (string $path, array $request, array $response): void {
-            $this->save_log('api', json_encode(['path' => $path] + $request, JSON_UNESCAPED_UNICODE) ?: '', json_encode($response, JSON_UNESCAPED_UNICODE) ?: '');
+            $this->logCall('api', ['path' => $path] + $request, $response);
         });
     }
+
+    // ======================================================== both generations
+
+    /**
+     * Open the account and its domain.
+     *
+     * WISECP 5 calls this with no arguments and reads the service itself;
+     * WISECP 3 passes the domain and the buyer's answers. One signature serves
+     * both, and what is returned is what WISECP 3 documents: the username, the
+     * password and the FTP block.
+     *
+     * @param array<string,mixed> $order_options
+     * @return array<string,mixed>|false
+     */
+    public function create($domain = '', $order_options = [])
+    {
+        $given = is_array($order_options) ? $order_options : [];
+
+        try {
+            $account = $this->openAccount(is_string($domain) ? $domain : '', $given);
+        } catch (Exception $e) {
+            return $this->failed(__FUNCTION__, $e);
+        }
+
+        if (! $this->hostStoresOptions()) {
+            // WISECP 3 stores exactly these three keys and drops the rest, so
+            // the id is not kept here. It is resolved from the username on each
+            // later call instead (see accountId()).
+            return [
+                'username' => $account['username'],
+                'password' => $account['password'],
+                'ftp_info' => $account['ftp_info'],
+            ];
+        }
+
+        // WISECP 5 reads every key of this array as an instruction: "config"
+        // and "login" are merged under those names, anything else is written to
+        // the option root. The panel password goes in sealed, because its own
+        // documentation says never to store one in clear.
+        return [
+            'config' => [
+                'user' => $account['username'],
+                'password' => $this->sealed($account['password']),
+                'id' => $account[self::ACCOUNT_ID],
+            ],
+            // "login" is what the client area shows the customer, so it is
+            // the readable one; sealing it would print the ciphertext as their
+            // password. "config" is the stored identity, which the host's own
+            // documentation says to encrypt.
+            'login' => [
+                'username' => $account['username'],
+                'password' => $account['password'],
+                'url' => $this->panelUrl(),
+            ],
+            self::ACCOUNT_ID => $account[self::ACCOUNT_ID],
+            'ftp_info' => $account['ftp_info'],
+        ];
+    }
+
+    /**
+     * Nothing has to happen on the panel when a renewal is paid: the account is
+     * already open and its plan has not changed.
+     *
+     * It is still declared, because a name the core cannot find is not a
+     * no-op - the queue records "module method not found" and the renewal is
+     * marked failed.
+     */
+    public function renew(): bool
+    {
+        return true;
+    }
+
+    /** @return bool */
+    public function suspend()
+    {
+        try {
+            return $this->suspendAccount();
+        } catch (Exception $e) {
+            return $this->failed(__FUNCTION__, $e);
+        }
+    }
+
+    /** @return bool */
+    public function unsuspend()
+    {
+        try {
+            return $this->unsuspendAccount();
+        } catch (Exception $e) {
+            return $this->failed(__FUNCTION__, $e);
+        }
+    }
+
+    /** @return bool */
+    public function change_password($password = '')
+    {
+        try {
+            return $this->setPassword(is_string($password) ? $password : '');
+        } catch (Exception $e) {
+            return $this->failed(__FUNCTION__, $e);
+        }
+    }
+
+    // ============================================================= WISECP 5
 
     /** Which cards and buttons the service page offers. */
     public function configure_features(): void
@@ -62,11 +176,7 @@ class Panelica extends ServerModule
 
     public function test_connect(): bool
     {
-        // /v1/plans needs the key, the secret and the clock to be right, and it
-        // reads nothing: a failed signature answers 401 and throws.
-        $this->api->get('/v1/plans');
-
-        return true;
+        return $this->connect();
     }
 
     /**
@@ -77,164 +187,66 @@ class Panelica extends ServerModule
      */
     public function product_configuration(array $data = []): array
     {
-        try {
-            $plans = $this->planChoices();
-            $unavailable = null;
-        } catch (Exception $e) {
-            $plans = null;
-            $unavailable = $this->text('plans_unavailable', ['error' => $e->getMessage()]);
-        }
-
-        $plan = $plans === null
-            ? ['name' => $this->text('setting_plan'), 'description' => $unavailable, 'type' => 'text', 'value' => (string) ($data['plan_id'] ?? ''), 'wrap_width' => 'col-lg-6']
-            : ['name' => $this->text('setting_plan'), 'description' => $this->text('setting_plan_description'), 'type' => 'dropdown', 'options' => $plans, 'value' => (string) ($data['plan_id'] ?? ''), 'wrap_width' => 'col-lg-6'];
-
-        return [
-            'plan_id' => $plan,
-            'account_role' => [
-                'name' => $this->text('setting_role'),
-                'description' => $this->text('setting_role_description'),
-                'type' => 'dropdown',
-                'options' => ['USER' => $this->text('role_user'), 'RESELLER' => $this->text('role_reseller')],
-                'value' => (string) ($data['account_role'] ?? 'USER'),
-                'wrap_width' => 'col-lg-6',
-            ],
-        ];
+        return $this->packageFields($data, 'col-lg-6');
     }
 
     /**
-     * @param array<string,mixed> $data
-     * @return array<string,mixed>
-     */
-    public function save_product_configuration(array $data = []): array
-    {
-        // The plan is what every later call reads, so a package without one is
-        // refused here rather than at the customer's first order.
-        if (trim((string) ($data['plan_id'] ?? '')) === '') {
-            throw new Exception($this->text('plan_required'));
-        }
-
-        $role = strtoupper(trim((string) ($data['account_role'] ?? 'USER')));
-
-        return ['plan_id' => trim((string) $data['plan_id']), 'account_role' => in_array($role, ['USER', 'RESELLER'], true) ? $role : 'USER'];
-    }
-
-    /**
-     * Open the account. What is returned is written onto the service.
+     * The package form, saved.
      *
-     * @return array<string,mixed>
-     */
-    public function create(): array
-    {
-        $domain = $this->domain();
-        $username = $this->username($domain);
-        $password = $this->password();
-
-        $existing = $this->findAccount($username);
-        if ($existing !== null) {
-            // A retry after a half-finished order: the account is there, so the
-            // service is given what it needs instead of a duplicate failing.
-            return $this->created((string) $existing['id'], $username, $password, $domain);
-        }
-
-        $account = $this->api->post('/v1/accounts', [
-            'username' => $username,
-            'email' => $this->email(),
-            'password' => $password,
-            'full_name' => $this->fullName(),
-            'role' => $this->role(),
-            'plan_id' => $this->planId(),
-            'auto_username' => true,
-        ]);
-
-        $id = (string) ($account['id'] ?? '');
-        if ($id === '') {
-            throw new Exception($this->text('no_account_returned'));
-        }
-
-        // auto_username: the panel may have made the name readable and free.
-        $username = (string) ($account['username'] ?? $username);
-
-        if ($domain !== '') {
-            $this->api->post('/v1/domains', ['user_id' => $id, 'domain_name' => $domain]);
-        }
-
-        return $this->created($id, $username, $password, $domain);
-    }
-
-    public function suspend(): bool
-    {
-        $this->api->post('/v1/accounts/' . $this->accountId() . '/suspend', ['reason' => trim((string) ($this->service['suspended_reason'] ?? '')) ?: 'Suspended from WISECP']);
-
-        return true;
-    }
-
-    public function unsuspend(): bool
-    {
-        $this->api->post('/v1/accounts/' . $this->accountId() . '/unsuspend');
-
-        return true;
-    }
-
-    /**
-     * Delete the account on the panel.
+     * This host passes the values by reference and expects nothing back, so the
+     * normalised values are written into $values in place. Returning them
+     * instead would silently discard the normalisation.
      *
-     * The first version never reached the panel: WISECP calls cancel(), and the
-     * delete lived in removeAccount()/terminate(), which nothing calls. An
-     * account already gone counts as done, so a repeated cancellation does not
-     * leave the service stuck.
+     * @param array<string,mixed> $values
      */
+    public function save_product_configuration(array &$values): void
+    {
+        $values = $this->checkedPackage($values) + $values;
+    }
+
     public function cancel(): bool
     {
-        $id = $this->accountId(required: false);
-
-        if ($id === '') {
-            return true;
-        }
-
-        try {
-            $this->api->delete('/v1/accounts/' . $id);
-        } catch (Exception $e) {
-            if (! $this->api->lastStatusWas(404)) {
-                throw $e;
-            }
-        }
-
-        return true;
-    }
-
-    public function change_password(string $password = ''): bool
-    {
-        $password = trim($password);
-        if ($password === '') {
-            throw new Exception($this->text('password_required'));
-        }
-
-        $this->api->post('/v1/accounts/' . $this->accountId() . '/change-password', ['password' => $password]);
-        $this->save_login_password($password);
-
-        return true;
+        // No catch: on this host the exception is what the caller wants.
+        return $this->deleteAccount();
     }
 
     /**
-     * Move the account to the plan of the package it was moved to.
-     *
      * @param array<string,mixed> $new_product
      */
     public function upgrade(array $new_product = []): bool
     {
-        $module = is_array($new_product['module_data'] ?? null) ? $new_product['module_data'] : [];
-        $plan = trim((string) ($module['plan_id'] ?? ''));
+        return $this->movePlan($new_product);
+    }
 
-        if ($plan === '') {
-            // Nothing to move to: the new package has no Panelica plan, which
-            // is a configuration mistake and not something to do quietly.
-            throw new Exception($this->text('plan_required'));
-        }
+    /**
+     * The service's own form in the admin panel: which plan this one account is
+     * on, whatever its package says.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function service_configuration(): array
+    {
+        return $this->serviceFields('col-lg-6');
+    }
 
-        $this->api->patch('/v1/accounts/' . $this->accountId(), ['plan_id' => $plan]);
+    /**
+     * The service form, saved, and the change carried to the panel.
+     *
+     * Passed by reference and returning nothing, like the product form.
+     *
+     * @param array<string,mixed> $values
+     */
+    public function save_service_configuration(array &$values): void
+    {
+        $plan = trim((string) ($values['plan_id'] ?? ''));
 
-        return true;
+        // The panel is changed first. If it refuses, the exception stops the
+        // save, so WISECP does not end up recording a plan the account is not
+        // on - which is the state that makes an invoice and an account
+        // disagree with nobody noticing.
+        $this->setPlan($plan, (string) ($this->orderOptions()['plan_id'] ?? ''));
+
+        $values['plan_id'] = $plan;
     }
 
     /**
@@ -244,23 +256,42 @@ class Panelica extends ServerModule
      */
     public function dashboard_data(): array
     {
-        $account = $this->api->get('/v1/accounts/' . $this->accountId());
-        $usage = $this->usage();
-        $host = $this->panelHost();
+        $facts = $this->accountFacts();
 
         return [
             'gauges' => array_filter([
-                'disk' => $usage['disk'] ?? null,
-                'bandwidth' => $usage['bandwidth'] ?? null,
+                'disk' => $this->gaugeItem($facts['usage']['disk'] ?? null),
+                'bandwidth' => $this->gaugeItem($facts['usage']['bandwidth'] ?? null),
             ]),
             'server_info' => array_filter([
-                'domain' => $this->item($this->domain(), copyable: true),
-                'username' => $this->item((string) ($account['username'] ?? ''), copyable: true),
-                'status' => $this->statusItem((string) ($account['status'] ?? 'active')),
-                'plan' => $this->item((string) ($account['plan']['name'] ?? $account['plan_name'] ?? '')),
-                'panel' => $this->item($host === '' ? '' : 'https://' . $host . ':' . $this->panelPort(), link: true),
-                'nameservers' => $this->item($this->nameservers()),
+                'domain' => $this->item($facts['domain'], copyable: true),
+                'username' => $this->item($facts['username'], copyable: true),
+                'status' => $this->statusItem($facts['status']),
+                'plan' => $this->item($facts['plan']),
+                'panel' => $this->item($facts['panel'], link: true),
+                'nameservers' => $this->item($facts['nameservers']),
             ]),
+        ];
+    }
+
+    /**
+     * One gauge, in this host's shape: raw numbers and a unit, with the word
+     * "unlimited" where there is no ceiling. The theme works out the ratio and
+     * the colour itself, so no percentage is sent.
+     *
+     * @param array{used:float,limit:float}|null $usage
+     * @return array<string,mixed>
+     */
+    private function gaugeItem(?array $usage): array
+    {
+        if ($usage === null) {
+            return [];
+        }
+
+        return [
+            'used' => round($usage['used'], 2),
+            'total' => $usage['limit'] > 0 ? round($usage['limit'], 2) : 'unlimited',
+            'unit' => 'MB',
         ];
     }
 
@@ -279,242 +310,397 @@ class Panelica extends ServerModule
         ], static fn ($value): bool => $value !== null);
     }
 
-    // ---------------------------------------------------------------- helpers
-
     /**
-     * The account's id on the panel, kept on the service options by create().
+     * The panel, opened as the account's own user.
+     *
+     * This host asks for the URL and sends the customer itself.
      */
-    private function accountId(bool $required = true): string
+    public function sso_panel_login(): string
     {
-        $id = trim((string) ($this->options[self::ACCOUNT_ID] ?? ''));
+        return $this->panelLoginUrl('/v1/accounts/' . $this->accountId() . '/sso');
+    }
 
-        if ($id === '' && $required) {
-            throw new Exception($this->text('no_account_id'));
+    /** The panel as its operator, for the administrator only. */
+    public function sso_root_panel_login(): string
+    {
+        return $this->panelLoginUrl('/v1/sso/root');
+    }
+
+    // ============================================================= WISECP 3
+
+    /** @return bool */
+    public function testConnect()
+    {
+        try {
+            return $this->connect();
+        } catch (Exception $e) {
+            return $this->failed(__FUNCTION__, $e);
         }
-
-        return $id;
     }
 
     /**
-     * @return array<string,mixed>
+     * @param array<string,mixed> $data
+     * @return array<string,array<string,mixed>>
      */
-    private function created(string $id, string $username, string $password, string $domain): array
+    public function config_options($data = [])
     {
-        $this->options[self::ACCOUNT_ID] = $id;
-        $this->save_options();
-        $this->save_login_password($password);
+        return $this->packageFields(is_array($data) ? $data : [], 100);
+    }
 
-        $host = $this->panelHost();
+    /** @return bool */
+    public function terminate()
+    {
+        try {
+            return $this->deleteAccount();
+        } catch (Exception $e) {
+            return $this->failed(__FUNCTION__, $e);
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $orderopt
+     * @param array<string,mixed> $product
+     * @return bool
+     */
+    public function apply_updowngrade($orderopt = [], $product = [])
+    {
+        try {
+            return $this->movePlan(is_array($product) ? $product : []);
+        } catch (Exception $e) {
+            return $this->failed(__FUNCTION__, $e);
+        }
+    }
+
+    /** @return array<string,mixed>|false */
+    public function getDisk()
+    {
+        return $this->gauge('disk', 'MB', 1.0);
+    }
+
+    /** @return array<string,mixed>|false */
+    public function getBandwidth()
+    {
+        // The panel counts traffic in megabytes; WISECP 3 labels this gauge in
+        // gigabytes, so the number is converted with the label.
+        return $this->gauge('bandwidth', 'GB', 1 / 1024);
+    }
+
+    /**
+     * The accounts on this server, for the server's account list.
+     *
+     * @return array<int,array<string,mixed>>|false
+     */
+    public function listAccounts()
+    {
+        try {
+            $accounts = $this->api->get('/v1/accounts');
+        } catch (Exception $e) {
+            return $this->failed(__FUNCTION__, $e);
+        }
+
+        $rows = [];
+
+        foreach ($accounts as $account) {
+            if (! is_array($account)) {
+                continue;
+            }
+
+            $rows[] = [
+                'cdate' => substr((string) ($account['created_at'] ?? ''), 0, 19) ?: '',
+                'domain' => (string) ($account['primary_domain'] ?? $account['domain'] ?? ''),
+                'username' => (string) ($account['username'] ?? ''),
+                'plan' => (string) ($account['plan']['name'] ?? $account['plan_name'] ?? ''),
+                'suspended' => in_array(strtolower((string) ($account['status'] ?? '')), ['suspended', 'inactive'], true),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * The service's own fields in the admin panel.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function adminArea_service_fields()
+    {
+        return $this->serviceFields(100);
+    }
+
+    /**
+     * The service fields, saved, and the change carried to the panel.
+     *
+     * This host hands over both the old and the new values and expects the
+     * four bags back, or false with the reason on $this->error.
+     *
+     * @param array<string,mixed> $data
+     * @return array<string,mixed>|false
+     */
+    public function save_adminArea_service_fields($data = [])
+    {
+        $data = is_array($data) ? $data : [];
+        $old = is_array($data['old'] ?? null) ? $data['old'] : [];
+        $new = is_array($data['new'] ?? null) ? $data['new'] : [];
+        $array = static fn (mixed $value): array => is_array($value) ? $value : [];
+
+        $before = $array($old['creation_info'] ?? null);
+        $after = $array($new['creation_info'] ?? null);
+
+        try {
+            // The panel first: a refusal must stop the save, or WISECP records
+            // a plan the account is not on and nothing says so.
+            $this->setPlan((string) ($after['plan_id'] ?? ''), (string) ($before['plan_id'] ?? ''));
+        } catch (Exception $e) {
+            return $this->failed(__FUNCTION__, $e);
+        }
 
         return [
-            'username' => $username,
-            'password' => $password,
-            self::ACCOUNT_ID => $id,
-            'ftp_info' => [
-                'ip' => (string) ($this->server['ip'] ?? ''),
-                'host' => $host !== '' ? $host : (string) ($this->server['ip'] ?? ''),
-                'username' => $username,
-                'password' => $password,
-                'port' => 21,
-            ],
-            'domain' => $domain,
+            'creation_info' => $after,
+            'config' => $array($new['config'] ?? null),
+            'ftp_info' => $array($new['ftp_info'] ?? null),
+            'options' => $array($new['options'] ?? null),
         ];
     }
 
-    /** @return array<string,mixed>|null */
-    private function findAccount(string $username): ?array
+    /**
+     * What the customer sees on the service page, WISECP 3's way: the buttons,
+     * then the page under pages/.
+     *
+     * @return string
+     */
+    public function clientArea()
     {
-        if ($username === '') {
-            return null;
+        $content = $this->clientArea_buttons_output();
+        $page = $this->currentPage();
+
+        if ($page === '') {
+            $page = 'home';
         }
 
         try {
-            $accounts = $this->api->get('/v1/accounts');
-        } catch (Exception) {
-            return null;    // the list is a convenience; a failure must not stop an order
+            $vars = $this->accountFacts() + ['error' => ''];
+        } catch (Exception $e) {
+            // The page still renders; it says what went wrong instead of
+            // leaving the customer an empty panel.
+            $this->logCall(__FUNCTION__, [], ['error' => $e->getMessage()]);
+            $vars = $this->emptyFacts() + ['error' => $e->getMessage()];
         }
 
-        foreach (is_array($accounts) ? $accounts : [] as $account) {
-            if (is_array($account) && strcasecmp((string) ($account['username'] ?? ''), $username) === 0) {
-                return $account;
-            }
-        }
-
-        return null;
+        return $content . $this->get_page('clientArea-' . $page, $vars);
     }
 
     /**
      * @return array<string,array<string,mixed>>
      */
-    private function usage(): array
+    public function clientArea_buttons()
     {
-        $id = $this->accountId(required: false);
-        if ($id === '') {
-            return [];
+        $page = $this->currentPage();
+
+        if ($page !== '' && $page !== 'home') {
+            // "turn-back" is WISECP's own string, already in the operator's
+            // language; ours is only the fallback.
+            $back = (string) ($this->hostArray('lang')['turn-back'] ?? '');
+
+            return ['home' => ['text' => $back !== '' ? $back : $this->text('back'), 'type' => 'page-loader']];
         }
 
-        $out = [];
-
-        try {
-            $quota = $this->api->get('/v1/resource-quota/users/' . $id);
-            $used = (float) ($quota['disk_used_mb'] ?? $quota['disk_usage_mb'] ?? 0);
-            $limit = (float) ($quota['disk_limit_mb'] ?? $quota['disk_quota_mb'] ?? 0);
-            if ($limit > 0 || $used > 0) {
-                $out['disk'] = ['used' => $used, 'total' => $limit, 'unit' => 'MB'];
-            }
-        } catch (Exception) {
-            // A panel that cannot answer leaves the gauge off the page rather
-            // than taking the page down with it.
-        }
-
-        try {
-            $bandwidth = $this->api->get('/v1/bandwidth/accounts/' . $id);
-            $used = (float) ($bandwidth['used_mb'] ?? $bandwidth['total_mb'] ?? 0);
-            $limit = (float) ($bandwidth['limit_mb'] ?? 0);
-            if ($limit > 0 || $used > 0) {
-                $out['bandwidth'] = ['used' => $used, 'total' => $limit, 'unit' => 'MB'];
-            }
-        } catch (Exception) {
-        }
-
-        return $out;
+        return [
+            'SingleSignOn' => ['text' => $this->text('open_panel'), 'type' => 'function', 'target_blank' => true],
+            'webMail' => ['text' => $this->text('open_webmail'), 'type' => 'function', 'target_blank' => true],
+        ];
     }
 
-    /** @return array<string,string> */
-    private function planChoices(): array
+    /** The panel, opened as the account's own user. */
+    public function use_clientArea_SingleSignOn()
     {
-        $plans = $this->api->get('/v1/plans');
-        $choices = [];
-
-        foreach (is_array($plans) ? $plans : [] as $plan) {
-            if (! is_array($plan)) {
-                continue;
-            }
-            $id = (string) ($plan['id'] ?? '');
-            if ($id !== '') {
-                $choices[$id] = (string) ($plan['name'] ?? $id);
-            }
-        }
-
-        return $choices;
+        return $this->openPanel('/v1/accounts/' . $this->accountId() . '/sso');
     }
 
-    private function planId(): string
+    /** Webmail, which needs no panel session. */
+    public function use_clientArea_webMail()
     {
-        $plan = trim((string) ($this->options['plan_id'] ?? ''));
+        $domain = $this->domain('', $this->orderOptions());
+        $url = $domain !== '' ? 'https://webmail.' . $domain : rtrim($this->panelUrl(), '/') . '/webmail';
 
-        if ($plan === '') {
+        return $this->redirect($url);
+    }
+
+    /** The same panel, opened from the admin side. */
+    public function use_adminArea_SingleSignOn()
+    {
+        return $this->openPanel('/v1/accounts/' . $this->accountId() . '/sso');
+    }
+
+    /** The panel as its operator, for the administrator only. */
+    public function use_adminArea_root_SingleSignOn()
+    {
+        return $this->openPanel('/v1/sso/root');
+    }
+
+    /** Which client-area page WISECP 3 is asking for. */
+    private function currentPage(): string
+    {
+        if (! property_exists($this, 'page')) {
+            return '';
+        }
+
+        return is_scalar($this->page) ? trim((string) $this->page) : '';
+    }
+
+    // ---------------------------------------------------------- presentation
+
+    /**
+     * The package form, in the generation's own measurement for widths.
+     *
+     * @param array<string,mixed> $data
+     * @param string|int $width
+     * @return array<string,array<string,mixed>>
+     */
+    private function packageFields(array $data, $width): array
+    {
+        try {
+            $plans = $this->planChoices();
+            $unavailable = null;
+        } catch (Exception $e) {
+            $plans = null;
+            $unavailable = $this->text('plans_unavailable', ['error' => $e->getMessage()]);
+        }
+
+        // A plan list the panel cannot answer for leaves a text box, so a
+        // package can still be configured by hand instead of not at all.
+        $plan = $plans === null
+            ? ['name' => $this->text('setting_plan'), 'description' => $unavailable, 'type' => 'text', 'value' => (string) ($data['plan_id'] ?? ''), 'wrap_width' => $width]
+            : ['name' => $this->text('setting_plan'), 'description' => $this->text('setting_plan_description'), 'type' => 'dropdown', 'options' => $plans, 'value' => (string) ($data['plan_id'] ?? ''), 'wrap_width' => $width];
+
+        return [
+            'plan_id' => $plan,
+            'account_role' => [
+                'name' => $this->text('setting_role'),
+                'description' => $this->text('setting_role_description'),
+                'type' => 'dropdown',
+                'options' => ['USER' => $this->text('role_user'), 'RESELLER' => $this->text('role_reseller')],
+                'value' => (string) ($data['account_role'] ?? 'USER'),
+                'wrap_width' => $width,
+            ],
+        ];
+    }
+
+    /**
+     * One service's own fields, in the generation's own measurement for widths.
+     *
+     * @param string|int $width
+     * @return array<string,array<string,mixed>>
+     */
+    private function serviceFields($width): array
+    {
+        $options = $this->orderOptions();
+        $fields = $this->packageFields($options, $width);
+
+        // The package's role is decided when the account is opened; what an
+        // operator changes here is the plan.
+        unset($fields['account_role']);
+
+        $fields['plan_id']['description'] = $this->text('service_plan_description');
+
+        $id = (string) ($options[self::ACCOUNT_ID] ?? '');
+        if ($id !== '') {
+            $fields['panelica_account'] = [
+                'name' => $this->text('service_account'),
+                'type' => 'output',
+                'value' => htmlspecialchars($id, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+                'wrap_width' => $width,
+            ];
+        }
+
+        return $fields;
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @return array<string,string>
+     */
+    private function checkedPackage(array $data): array
+    {
+        // The plan is what every later call reads, so a package without one is
+        // refused here rather than at the customer's first order.
+        if (trim((string) ($data['plan_id'] ?? '')) === '') {
             throw new Exception($this->text('plan_required'));
         }
 
-        return $plan;
+        $role = strtoupper(trim((string) ($data['account_role'] ?? 'USER')));
+
+        return ['plan_id' => trim((string) $data['plan_id']), 'account_role' => in_array($role, ['USER', 'RESELLER'], true) ? $role : 'USER'];
     }
 
-    private function role(): string
+    /**
+     * Everything both client areas show, read once.
+     *
+     * @return array<string,mixed>
+     */
+    private function accountFacts(): array
     {
-        $role = strtoupper(trim((string) ($this->options['account_role'] ?? 'USER')));
+        $account = $this->accountSnapshot();
 
-        return in_array($role, ['USER', 'RESELLER'], true) ? $role : 'USER';
+        return [
+            'domain' => $this->domain('', $this->orderOptions()),
+            'username' => (string) ($account['username'] ?? $this->serviceUsername()),
+            'status' => strtolower((string) ($account['status'] ?? 'active')) ?: 'active',
+            'plan' => (string) ($account['plan']['name'] ?? $account['plan_name'] ?? ''),
+            'panel' => $this->panelUrl(),
+            'nameservers' => $this->nameservers(),
+            'usage' => $this->usage(),
+        ];
     }
 
-    private function domain(): string
+    /** @return array<string,mixed> */
+    private function emptyFacts(): array
     {
-        foreach ([$this->service['domain'] ?? null, $this->options['domain'] ?? null] as $value) {
-            $domain = strtolower(trim((string) $value));
-            if ($domain !== '') {
-                return $domain;
-            }
+        return [
+            'domain' => $this->domain('', $this->orderOptions()),
+            'username' => $this->serviceUsername(),
+            'status' => 'active',
+            'plan' => '',
+            'panel' => $this->panelUrl(),
+            'nameservers' => $this->nameservers(),
+            'usage' => [],
+        ];
+    }
+
+    /**
+     * One WISECP 3 gauge, in that generation's shape.
+     *
+     * @return array<string,mixed>|false
+     */
+    private function gauge(string $which, string $unit, float $factor)
+    {
+        try {
+            $usage = $this->usage();
+        } catch (Exception $e) {
+            return $this->failed($which, $e);
         }
 
-        return '';
-    }
-
-    private function username(string $domain): string
-    {
-        $given = trim((string) ($this->options['username'] ?? ''));
-        if ($given !== '') {
-            return $given;
+        if (! isset($usage[$which])) {
+            // Nothing to show is not an error; WISECP 3 reads false as "this
+            // gauge has no value".
+            return false;
         }
 
-        // From the domain, as the panel wants it: letters and digits, starting
-        // with a letter, at most sixteen characters.
-        $base = preg_replace('/[^a-z0-9]/', '', strtolower($domain)) ?? '';
-        if ($base === '' || ! ctype_alpha($base[0])) {
-            $base = 'pnl' . $base;
-        }
+        $used = $usage[$which]['used'] * $factor;
+        $limit = $usage[$which]['limit'] * $factor;
+        $percent = $limit > 0 ? min(100, (int) round($used / $limit * 100)) : 0;
 
-        return substr($base, 0, 16);
+        return [
+            'limit' => $limit > 0 ? $limit : 0,
+            'used' => $used > 0 ? $used : 0,
+            'used-percent' => $percent,
+            'format-limit' => $limit > 0 ? $this->formatNumber($limit) . ' ' . $unit : '∞',
+            'format-used' => $used > 0 ? $this->formatNumber($used) . ' ' . $unit : '0 ' . $unit,
+        ];
     }
 
-    private function password(): string
+    private function formatNumber(float $value): string
     {
-        $given = trim((string) ($this->options['password'] ?? ''));
-        if ($given !== '') {
-            return $given;
-        }
-
-        // Long enough for the panel's own rule (eight characters) with room to
-        // spare, and from a source meant for secrets.
-        $alphabet = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#%*-_';
-        $password = '';
-        for ($i = 0; $i < 16; $i++) {
-            $password .= $alphabet[random_int(0, strlen($alphabet) - 1)];
-        }
-
-        return $password;
-    }
-
-    private function email(): string
-    {
-        foreach ([$this->service['user_email'] ?? null, $this->options['email'] ?? null] as $value) {
-            $email = trim((string) $value);
-            if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL) !== false) {
-                return $email;
-            }
-        }
-
-        $domain = $this->domain();
-
-        return $domain !== '' ? 'hostmaster@' . $domain : 'hostmaster@localhost';
-    }
-
-    private function fullName(): string
-    {
-        $name = trim((string) ($this->service['user_name'] ?? ''));
-
-        return $name !== '' ? $name : $this->domain();
-    }
-
-    private function panelHost(): string
-    {
-        foreach ([$this->server['hostname'] ?? null, $this->server['name'] ?? null, $this->server['ip'] ?? null] as $value) {
-            $host = trim((string) $value);
-            if ($host !== '') {
-                return preg_replace('#^https?://#i', '', $host) ?? $host;
-            }
-        }
-
-        return '';
-    }
-
-    private function panelPort(): int
-    {
-        $port = (int) ($this->server['port'] ?? 8443);
-
-        return $port > 0 && $port < 65536 ? $port : 8443;
-    }
-
-    private function nameservers(): string
-    {
-        $ns = [];
-        foreach (['ns1', 'ns2', 'ns3', 'ns4'] as $key) {
-            $value = trim((string) ($this->server[$key] ?? ''));
-            if ($value !== '') {
-                $ns[] = $value;
-            }
-        }
-
-        return implode(', ', $ns);
+        return rtrim(rtrim(number_format($value, 2, '.', ''), '0'), '.');
     }
 
     /** @return array<string,mixed> */
@@ -550,19 +736,108 @@ class Panelica extends ServerModule
         ];
     }
 
-    /**
-     * A string from lang/, with :placeholders filled.
-     *
-     * @param array<string,string> $replace
-     */
-    private function text(string $key, array $replace = []): string
-    {
-        $text = (string) ($this->lang[$key] ?? '');
+    // --------------------------------------------------------------- plumbing
 
-        foreach ($replace as $name => $value) {
-            $text = str_replace(':' . $name, $value, $text);
+    /**
+     * A one-time link to the panel, followed.
+     *
+     * @return bool
+     */
+    private function openPanel(string $path)
+    {
+        try {
+            $answer = $this->api->post($path);
+        } catch (Exception $e) {
+            // A WISECP 3 button answers the browser itself, so the reason is
+            // printed for the customer rather than thrown at a caller that is
+            // not listening.
+            $this->error = $e->getMessage();
+            $this->logCall(__FUNCTION__, ['path' => $path], ['error' => $e->getMessage()]);
+            echo $this->text('panel_unavailable', ['error' => $e->getMessage()]);
+
+            return false;
         }
 
-        return $text;
+        $url = $this->urlFrom($answer);
+
+        if ($url === '') {
+            echo $this->text('panel_unavailable', ['error' => $this->text('no_sso_url')]);
+
+            return false;
+        }
+
+        return $this->redirect($url);
+    }
+
+    /** A one-time link to the panel, as a URL for the caller to follow. */
+    private function panelLoginUrl(string $path): string
+    {
+        $url = $this->urlFrom($this->api->post($path));
+
+        if ($url === '') {
+            throw new Exception($this->text('no_sso_url'));
+        }
+
+        return $url;
+    }
+
+    /**
+     * The link out of what the panel answered, however it phrased it.
+     *
+     * @param array<string,mixed> $answer
+     */
+    private function urlFrom(array $answer): string
+    {
+        $url = trim((string) ($answer['url'] ?? $answer['login_url'] ?? ''));
+
+        if ($url !== '') {
+            return $url;
+        }
+
+        $token = trim((string) ($answer['token'] ?? ''));
+
+        return $token === '' ? '' : rtrim($this->panelUrl(), '/') . '/sso?token=' . urlencode($token);
+    }
+
+    /** @return bool */
+    private function redirect(string $url)
+    {
+        if (class_exists('\Utility') && method_exists('\Utility', 'redirect')) {
+            \Utility::redirect($url);
+        } else {
+            header('Location: ' . $url);
+        }
+
+        return true;
+    }
+
+    /**
+     * A failure, reported the way this host reports one.
+     *
+     * The two generations do not agree, and the difference is not cosmetic.
+     * WISECP 5 expects the exception and shows its message; its own
+     * documentation calls assigning to $this->error "a leftover of the previous
+     * generation ... throw a translated exception and the caller surfaces the
+     * message". WISECP 3 is the other way round: its caller does not catch, so
+     * an exception thrown there reaches the customer as a blank page - which is
+     * why every WISECP 3 module, including WISECP's own samples, catches inside
+     * the module and returns false with the message on $this->error.
+     *
+     * So the message is always written where WISECP 3 reads it, always logged,
+     * and then on a WISECP 5 host thrown on to the caller that is waiting for
+     * it. The verbs above need no branch of their own.
+     *
+     * @return false
+     */
+    private function failed(string $action, Exception $e): bool
+    {
+        $this->error = $e->getMessage();
+        $this->logCall($action, ['service' => $this->serviceUsername()], ['error' => $e->getMessage()]);
+
+        if ($this->hostStoresOptions()) {
+            throw $e;
+        }
+
+        return false;
     }
 }

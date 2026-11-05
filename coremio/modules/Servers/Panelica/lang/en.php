@@ -12,6 +12,10 @@ return [
     'role_reseller' => 'Reseller',
     'plans_unavailable' => 'The plans could not be read from the panel: :error',
 
+    // One service's own form
+    'service_plan_description' => 'The plan this one account is on. Changing it here changes it on the panel.',
+    'service_account' => 'Panelica account',
+
     // Refusals
     'plan_required' => 'This package has no Panelica plan. Choose one on the product\'s Module tab.',
     'password_required' => 'A new password is needed.',
@@ -31,4 +35,11 @@ return [
     'status_suspended' => 'Suspended',
     'status_terminated' => 'Terminated',
     'status_pending' => 'Being set up',
+
+    // Buttons and what happens when one cannot be followed
+    'open_panel' => 'Open the panel',
+    'open_webmail' => 'Webmail',
+    'back' => 'Back',
+    'panel_unavailable' => 'The panel could not be opened: :error',
+    'no_sso_url' => 'The panel did not return a login link.',
 ];

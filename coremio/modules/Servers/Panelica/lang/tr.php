@@ -12,6 +12,10 @@ return [
     'role_reseller' => 'Bayi',
     'plans_unavailable' => 'Paketler panelden okunamadı: :error',
 
+    // Tek bir hizmetin kendi formu
+    'service_plan_description' => 'Bu hesabin bagli oldugu plan. Burada degistirmek panelde de degistirir.',
+    'service_account' => 'Panelica hesabi',
+
     // Reddetmeler
     'plan_required' => 'Bu üründe Panelica paketi seçili değil. Ürünün Modül sekmesinden seçin.',
     'password_required' => 'Yeni parola gerekli.',
@@ -31,4 +35,11 @@ return [
     'status_suspended' => 'Askıda',
     'status_terminated' => 'Kapatıldı',
     'status_pending' => 'Kuruluyor',
+
+    // Dugmeler ve bir dugme izlenemediginde
+    'open_panel' => 'Paneli ac',
+    'open_webmail' => 'Webmail',
+    'back' => 'Geri',
+    'panel_unavailable' => 'Panel acilamadi: :error',
+    'no_sso_url' => 'Panel bir giris baglantisi dondurmedi.',
 ];

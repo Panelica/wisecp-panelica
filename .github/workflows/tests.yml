@@ -6,11 +6,30 @@ on:
   pull_request:
 
 jobs:
+  # The module runs on PHP 8.1 and up, which is lower than PHPUnit 11 supports.
+  # So 8.1 is proven by parsing every file, and the behaviour is proven on the
+  # versions the test runner supports.
+  parses-on-the-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+      - run: find coremio -name '*.php' -print0 | xargs -0 -n1 php -l
+
   phpunit:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         php: ['8.2', '8.3', '8.4']
+        # Both WISECP generations, every PHP version. A module that is silent on
+        # one host is the fault this repository exists to fix, so neither is
+        # allowed to go untested.
+        generation: ['5', '3']
+    name: "PHP ${{ matrix.php }} / WISECP ${{ matrix.generation }}"
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
@@ -18,4 +37,4 @@ jobs:
           php-version: ${{ matrix.php }}
           coverage: none
       - run: composer install --no-interaction --no-progress
-      - run: vendor/bin/phpunit --no-coverage
+      - run: composer run test:v${{ matrix.generation }}

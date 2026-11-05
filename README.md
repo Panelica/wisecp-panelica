@@ -1,14 +1,17 @@
-# Panelica module for WiseCP
+# Panelica module for WISECP
 
-A WiseCP server module that provisions and manages hosting accounts on a
+A WISECP server module that provisions and manages hosting accounts on a
 Panelica server through Panelica's External API.
+
+It runs on **both generations of WISECP's module API** — the 3.x line and the
+current one — from one copy of the code. See [Two generations](#two-generations).
 
 ## Where this came from
 
 The first version of this module was written by **Bilge Kara**
 ([@Gurbetseli](https://github.com/Gurbetseli)), who runs gurbetseli.net and has
 spent twenty years around hosting control panels. He built it against his own
-WiseCP installation, published it under the MIT licence at
+WISECP installation, published it under the MIT licence at
 [Gurbetseli/Panelica-Wisecp3](https://github.com/Gurbetseli/Panelica-Wisecp3),
 and asked us to carry it on. Every commit before this README is his, with his
 name on it, and `LICENSE` keeps his copyright notice as the MIT licence
@@ -19,90 +22,165 @@ do for [whmcs-panelica](https://github.com/Panelica/whmcs-panelica).
 
 ## State
 
-The five gaps below are written and covered by tests. **Nothing has yet been run
-against a real WISECP installation**, so the module is unreleased and this
-repository is private until it has been.
+Everything below is written and covered by tests that run on both generations.
+**Nothing has yet been run against a real WISECP installation**, so the module
+is unreleased and this repository is private until it has been.
 
-What was wrong, and is now fixed:
+## Two generations
 
-1. **The customer saw nothing.** The service page is built from
-   `dashboard_data()`. The first version answered in `clientArea_home()` and
-   `client_area_data()`, which the core does not call, so the page had nothing
-   to draw. It now shows the domain, the username, the status, the plan, the
-   nameservers, a link to the panel, and disk and traffic as gauges.
-2. **Deleting did not reach the panel.** The core calls `cancel()`; the delete
-   lived in `removeAccount()` and `terminate()`, which nothing calls. `cancel()`
-   now deletes the account, treats one already gone as done, and does not
-   swallow any other refusal.
-3. **No upgrade or downgrade.** `upgrade()` moves the account to the plan the
-   new package carries, and refuses a package that has no plan rather than
-   doing nothing quietly.
-4. **No package edit from the admin area.** `product_configuration()` offers the
-   panel's plans as a dropdown and `save_product_configuration()` refuses a
-   package without one. A panel that cannot be reached leaves the form usable
-   with the saved value in a text box.
-5. **Order and account were not in step.** `create()` opens the account and its
-   domain, keeps the account id on the service, and recognises a half-finished
-   order instead of opening a second account. `suspend()`, `unsuspend()`,
-   `change_password()` and `cancel()` follow it.
+WISECP asks a module for its work by calling a method by name, and it only
+calls the names its own version knows. The two lines in the field disagree on
+most of them:
 
-### Why it did not work
+| The job | WISECP 3 | WISECP 5 |
+| --- | --- | --- |
+| test the server | `testConnect()` | `test_connect()` |
+| the package form | `config_options()` | `product_configuration()` |
+| save that form | — (returned) | `save_product_configuration(array &$v)` |
+| the service's own form | `adminArea_service_fields()` | `service_configuration()` |
+| delete | `terminate()` | `cancel()` |
+| change plan | `apply_updowngrade($o, $p)` | `upgrade($p)` |
+| what the customer sees | `clientArea()` + `pages/` | `dashboard_data()` |
+| disk and traffic | `getDisk()`, `getBandwidth()` | `metrics_usage()` |
+| open the panel | `use_clientArea_SingleSignOn()` | `sso_panel_login()` |
+| the account list | `listAccounts()` | — |
 
-The first version carried two generations of WISECP's module API at once:
-`testConnect()` beside `test_connect()`, `terminate()` and `removeAccount()`
-beside `cancel()`, `apply_updowngrade()` and `change_plan()` beside `upgrade()`,
-`clientArea_home()` and `client_area_data()` beside `dashboard_data()`. For
-every job one name was read and the other sat unused. `config.php` had the same
-split: it used the WISECP 3 keys (`access-hash`, `server-info-checker`,
-`server-info-port`), which the current core does not read, so the server form
-offered no access-hash field and no connection test.
+They also disagree on three things that are easy to miss because nothing
+complains:
 
-There is one generation here, the current one, as documented at
-[dev.wisecp.com](https://dev.wisecp.com/en/writing-a-server-module) and as used
-by modules maintained today.
+- **Where the data is.** WISECP 5 resolves the package's answers onto
+  `$this->options` and the service onto `$this->service`. WISECP 3 keeps the
+  answers under `$this->order["options"]["creation_info"]` and the service's own
+  record on `$this->config`, and has no `$this->service` at all.
+- **What the module may store.** WISECP 5 offers `save_options()` and
+  `save_login_password()`, and reads every key of `create()`'s return as an
+  instruction. WISECP 3 offers neither — calling one is a fatal error — and
+  stores exactly `username`, `password` and `ftp_info`.
+- **How a failure is reported.** WISECP 5 expects an exception; its own
+  documentation calls assigning to `$this->error` "a leftover of the previous
+  generation". WISECP 3 is the opposite: its caller does not catch, so a module
+  that throws there shows a blank page.
+
+So the module is one core (`PanelicaCore.php`) holding every decision once, a
+compatibility layer that asks the host what it has before calling anything only
+one of them offers, and two thin sets of verb names in `Panelica.php` that both
+hand the work to that core. `config.php` carries both key spellings for the
+same reason; a host ignores the keys it does not know.
+
+### Why the first version did not work
+
+Measured, not guessed. The reporter's install stamps its assets `?v=3.1.9.8.2`,
+so it is a **WISECP 3** host, and the first version of the module carried the
+newer generation's name for most of the jobs where the two differ. On his
+server, these were simply absent (`git show a2a4fc38`):
+
+| Name his host calls | Present in the first version |
+| --- | --- |
+| `clientArea()` | no — it had `clientArea_home()` and `dashboard_data()` |
+| `config_options()` | no — it had `product_configuration()` |
+| `adminArea_service_fields()` | no |
+| `getDisk()`, `getBandwidth()` | no |
+
+A name the core cannot find is not an error anywhere: nothing is called and
+nothing is logged. That is the whole of why the customer's service page was
+empty, why no plan could be chosen on his host, and why there was no package
+form in the admin area.
+
+Deleting had a different cause, in code that was present. `removeAccount()`
+read the account id from `$this->options['config']['panelica_account_id']`,
+which was only ever written with `$this->options[...] = ...` and never
+persisted — WISECP 3 has no `save_options()` — so the id was always missing. It
+then looked the account up by username, and **returned `true` when it found
+nothing**, so WISECP recorded the cancellation as done while the account stayed
+open on the panel.
+
+One more thing worth recording: that file held two classes, `Panelica` and
+`Panelica_Module` (line 394 of 791). WISECP loads the one named after the
+module's folder, so roughly half the file never ran at all.
+
+## What the module does
+
+1. **The customer sees their account.** Domain, username, status, plan,
+   nameservers, a link to the panel, and disk and traffic — as gauges on
+   WISECP 5, as a table from `pages/clientArea-home.php` on WISECP 3, using the
+   markup its themes already style. Everything the customer or the panel
+   supplies is escaped on the way out.
+2. **Deleting in WISECP deletes on the panel.** An account already gone counts
+   as deleted, so a half-finished cancellation can still finish; any other
+   refusal is reported rather than swallowed.
+3. **Upgrade and downgrade.** The account moves to the plan the new package
+   carries. A package with no plan is refused instead of quietly doing nothing.
+4. **The package is editable from the admin panel.** The service's own form
+   offers the panel's plans and names the account. The panel is changed first,
+   so a refusal stops the save and WISECP never records a plan the account is
+   not on. Saving without touching the plan sends nothing.
+5. **Order and account stay in step.** `create()` opens the account and its
+   domain and recognises a half-finished order instead of opening a second
+   account; suspend, unsuspend, password change and delete follow it. A renewal
+   answers without touching the panel, because a name the core cannot find is
+   recorded as a failed renewal.
+
+### Single sign on
+
+Both generations can open the panel as the account's own user, and the operator
+can open it as the panel's operator from the admin side. The module asks
+Panelica for a one-time link and never puts a password in a URL.
+
+## Installing
+
+Copy the module into the WISECP installation:
+
+```
+<wisecp>/coremio/modules/Servers/Panelica/
+```
+
+Then add the server in the admin panel, under Products → Hosting → Servers:
+
+| Field | Value |
+| --- | --- |
+| Automation type | Panelica |
+| Hostname / IP | the panel's hostname or IP |
+| Port | the panel's port (8443 by default) |
+| Root/Reseller name | anything; the module does not use it |
+| Password | the Panelica **API key** |
+| Access hash | the Panelica **API secret** |
+| NS1 / NS2 | the nameservers the customer should use |
+
+Press Test Connection. It reads the plan list, which needs the key, the secret
+and the clock to all be right, and reads nothing else.
+
+Then set the plan on the product, under its Module tab.
 
 ## Tests
 
+The suite runs with no WISECP, no database and no network: the base class is
+stood in and the Panelica API is faked, so every line under test is the line
+that ships.
+
 ```bash
 composer install
-composer test
+composer test          # both generations, one run each
+composer test:v5       # the shared behaviour and the WISECP 5 verbs
+composer test:v3       # the shared behaviour and the WISECP 3 verbs
 ```
 
-27 tests, no WISECP and no network: `tests/stubs.php` stands in for the class
-WISECP owns, and `tests/FakeApi.php` answers for the panel. A test says what the
-panel replies and then reads back which calls the module made, in order. The
-module under test is the module that ships: `tests/TestPanelica.php` overrides
-`define_server_info()` and nothing else.
+A PHP process can define `ServerModule` only once, so one run is one host:
+`tests/stubs-v5.php` and `tests/stubs-v3.php` are the two stand-ins, and
+`WISECP_GENERATION` picks which the bootstrap loads. `tests/Shared` is the
+behaviour both hosts must show and runs under each of them; `tests/V3` and
+`tests/V5` carry what is true of one host only. "It works on both generations"
+means those two runs, and nothing less.
 
-What tests cannot prove, and a real installation still has to: that WISECP calls
-these methods with the data shapes assumed here, that the service page renders
-inside a theme, and that an order runs end to end.
+Each stand-in is built from what was read, not from what would be convenient:
+the WISECP 3 one has no `save_options()` and no `save_login_password()`, so a
+module that reaches for either fails the test the way it would fail on a
+customer's server.
 
-## How a server is defined in WiseCP
+## Requirements
 
-| Field | Value |
-|---|---|
-| Hostname | the Panelica server's hostname |
-| NS1 / NS2 | `ns1.<domain>` / `ns2.<domain>` |
-| Automation | Panelica |
-| IP address | the server's IP or hostname |
-| Root/Reseller name | `root` |
-| Password | the Panelica **API key** |
-| Access hash | the Panelica **API secret** |
-
-The module talks to the External API on port 3002, signed with HMAC-SHA256.
-
-## Layout
-
-```
-coremio/modules/Servers/Panelica/
-├── Panelica.php        the module: WiseCP calls these methods
-├── ApiClient.php       the External API client (HMAC signing, requests)
-├── config.php          what WiseCP shows on the server and package forms
-├── lang/{en,tr}.php    the strings
-└── pages/              the admin and client-area templates
-```
+PHP 8.1 or newer, which is what the API client already needed. The test runner
+needs 8.2; that the module itself parses on 8.1 is checked in CI.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Bilge, and contributors.
+MIT, as Bilge Kara released it. See `LICENSE` and `AUTHORS`.

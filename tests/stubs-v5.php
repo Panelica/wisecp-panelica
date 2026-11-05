@@ -3,12 +3,18 @@
 declare(strict_types=1);
 
 /*
- * WISECP, imitated.
+ * WISECP 5, imitated.
  *
  * The module is plain PHP that extends a class WISECP owns, so the tests stand
  * that class in and run the module with no WISECP, no database and no network.
  * What is here is only the surface the module actually touches; anything else
  * would be a guess about code we cannot see.
+ *
+ * This is the newer host: it resolves the package options onto $this->options,
+ * keeps what the module stores (save_options, save_login_password) and reads a
+ * failure from the exception. Its counterpart is stubs-v3.php, and the same
+ * behaviour tests run on both - which is the only way "it works on both
+ * generations" can be more than a claim.
  */
 
 if (! defined('DS')) {
@@ -33,6 +39,9 @@ class ServerModule
 
     public string $error = '';
 
+    /** Which host this is, for the tests to branch on. */
+    public int $generation = 5;
+
     protected bool $dashboard_cache = true;
 
     /** @var list<array{action:string,request:string,response:string}> what the module logged (tests read this) */
@@ -52,6 +61,7 @@ class ServerModule
     {
         $this->options = $options ?: [];
         $this->lang = include __DIR__ . '/../coremio/modules/Servers/Panelica/lang/en.php';
+        $this->generation = 5;
 
         if ($server) {
             $this->set_server($server);
@@ -86,6 +96,26 @@ class ServerModule
         $this->savedPasswords[] = $plain;
 
         return true;
+    }
+
+    /** What the module logged, in the shape the tests read on both hosts. */
+    public function logs(): array
+    {
+        return $this->logs;
+    }
+
+    /**
+     * The real one encrypts; this one only marks, so a test can tell a sealed
+     * secret from a clear one without reproducing WISECP's cipher.
+     */
+    protected function encode_str(string $plain): string
+    {
+        return 'sealed:' . base64_encode($plain);
+    }
+
+    protected function decode_str(string $sealed): string
+    {
+        return (string) base64_decode(substr($sealed, strlen('sealed:')), true);
     }
 
     public function save_options(): bool
