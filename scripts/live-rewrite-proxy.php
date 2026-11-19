@@ -18,7 +18,11 @@ if (!str_starts_with($path, '/api/external/')) {
     return;
 }
 
-$target = 'http://127.0.0.1:3002' . substr($path, strlen('/api/external')) . ($query ? '?' . $query : '');
+// PNL_UPSTREAM points this at a panel that is not the machine it runs on - a
+// test VM, say - over plain HTTP on the External API's own port. The default is
+// the local backend, which is what a development panel needs.
+$upstream = rtrim(getenv('PNL_UPSTREAM') ?: 'http://127.0.0.1:3002', '/');
+$target = $upstream . substr($path, strlen('/api/external')) . ($query ? '?' . $query : '');
 $body = file_get_contents('php://input');
 
 $headers = ['Accept: application/json'];
