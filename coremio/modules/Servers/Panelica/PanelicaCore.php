@@ -612,19 +612,77 @@ trait PanelicaCore
 
         $host = $this->panelHost();
 
-        return [
+        $result = [
             'username' => $username,
             'password' => $password,
             self::ACCOUNT_ID => $id,
             'domain' => $domain,
-            'ftp_info' => [
+        ];
+
+        // The host shows this block to the customer under an "FTP" heading, so
+        // it must hold an FTP login that actually works. Until 23 Nov 2026 it
+        // held the PANEL account's username and password: the customer read
+        // hosting credentials labelled FTP and could not log in with them,
+        // because the panel's FTP server authenticates against its own
+        // ftp_users records (proftpd.conf: SQLUserInfo ftp_users ...) and
+        // opening an account creates none. An FTP login is opened here instead,
+        // with the same password so the customer has one secret to keep.
+        $ftpUser = $this->openFtpLogin($id, $username, $password);
+
+        if ($ftpUser !== null) {
+            $result['ftp_info'] = [
                 'ip' => (string) ($this->hostArray('server')['ip'] ?? ''),
                 'host' => $host !== '' ? $host : (string) ($this->hostArray('server')['ip'] ?? ''),
-                'username' => $username,
+                'username' => $ftpUser,
                 'password' => $password,
                 'port' => 21,
-            ],
-        ];
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * An FTP login for the new account, or null when the panel will not open
+     * one.
+     *
+     * Refusals are ordinary here: a plan with no FTP allowance, a login name
+     * already taken on the server, FTP switched off. The account is open and
+     * paid for by this point, so none of them may fail the order - the block is
+     * left out instead, which is better than an FTP card the customer cannot
+     * use. The panel decides the login's home directory (the account's own
+     * home) and its quota from the plan, so neither is sent.
+     */
+    private function openFtpLogin(string $accountId, string $username, string $password): ?string
+    {
+        if ($accountId === '' || $username === '' || $password === '') {
+            return null;
+        }
+
+        try {
+            $created = $this->api()->post('/v1/ftp-accounts', [
+                'user_id' => $accountId,
+                'username' => $username,
+                'password' => $password,
+            ]);
+        } catch (Exception $e) {
+            $this->logCall(__FUNCTION__, ['user_id' => $accountId, 'username' => $username], ['error' => $e->getMessage()]);
+
+            return null;
+        }
+
+        // The panel may hand back a name of its own making; that is the name
+        // the customer has to type, so it wins over the one that was asked for.
+        $name = '';
+
+        foreach (['ftp_username', 'username'] as $key) {
+            if (isset($created[$key]) && is_string($created[$key]) && $created[$key] !== '') {
+                $name = $created[$key];
+                break;
+            }
+        }
+
+        return $name !== '' ? $name : $username;
     }
 
     /**

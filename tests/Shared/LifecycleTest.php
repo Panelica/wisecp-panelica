@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Panelica\Wisecp\Tests\Shared;
 
+use Exception;
 use Panelica\Wisecp\Tests\ModuleTestCase;
 
 /**
@@ -42,20 +43,57 @@ final class LifecycleTest extends ModuleTestCase
         $this->assertPasswordRemembered($this->createdPassword($result));
     }
 
-    public function test_create_hands_back_the_ftp_details_the_service_page_shows(): void
+    /**
+     * The FTP block has to carry an FTP login that works.
+     *
+     * Until 23 Nov 2026 it carried the PANEL account's username and password on
+     * port 21, and the customer panel shows that block under an "FTP" heading -
+     * so the customer was handed hosting credentials labelled FTP, and they
+     * could not log in with them: the panel's FTP server authenticates against
+     * its own ftp_users records (proftpd.conf: SQLUserInfo ftp_users ...), and
+     * opening an account creates none. The module opens one now.
+     */
+    public function test_create_opens_a_real_ftp_login_and_hands_that_back(): void
     {
         $this->module();
         $this->api->answer('GET', '/v1/accounts', [])
             ->answer('POST', '/v1/accounts', ['id' => 'acc-1', 'username' => 'customertest'])
-            ->answer('POST', '/v1/domains', []);
+            ->answer('POST', '/v1/domains', [])
+            ->answer('POST', '/v1/ftp-accounts', ['id' => 'ftp-1', 'ftp_username' => 'customertest']);
 
         $result = $this->create();
+
+        $asked = $this->api->calls[array_key_last($this->api->calls)]['body'];
+        $this->assertSame('acc-1', $asked['user_id']);
+        $this->assertSame('customertest', $asked['username']);
+        $this->assertSame($this->createdPassword($result), $asked['password']);
 
         $this->assertSame('203.0.113.10', $result['ftp_info']['ip']);
         $this->assertSame('panel.example.test', $result['ftp_info']['host']);
         $this->assertSame('customertest', $result['ftp_info']['username']);
         $this->assertSame($this->createdPassword($result), $result['ftp_info']['password']);
         $this->assertSame(21, $result['ftp_info']['port']);
+    }
+
+    /**
+     * The FTP login is an extra. A plan with no FTP allowance, a name already
+     * taken, a panel that refuses for any other reason - the account is open
+     * and paid for, so the order must not fail. The block is left out instead,
+     * because an FTP card the customer cannot use is worse than no card.
+     */
+    public function test_create_succeeds_without_an_ftp_block_when_the_panel_refuses_one(): void
+    {
+        $this->module();
+        $this->api->answer('GET', '/v1/accounts', [])
+            ->answer('POST', '/v1/accounts', ['id' => 'acc-1', 'username' => 'customertest'])
+            ->answer('POST', '/v1/domains', [])
+            ->answer('POST', '/v1/ftp-accounts', new Exception('plan allows no FTP accounts (HTTP 422)'), 422);
+
+        $result = $this->create();
+
+        $this->assertArrayNotHasKey('ftp_info', $result);
+        $this->assertSame('customertest', $this->createdUsername($result));
+        $this->assertNotSame('', $this->createdPassword($result));
     }
 
     public function test_create_takes_the_username_and_password_the_order_carries(): void

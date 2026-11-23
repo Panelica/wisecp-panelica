@@ -111,11 +111,14 @@ class Panelica extends ServerModule
             // WISECP 3 stores exactly these three keys and drops the rest, so
             // the id is not kept here. It is resolved from the username on each
             // later call instead (see accountId()).
-            return [
+            // ftp_info is left out when the panel would not open an FTP login
+            // (see openFtpLogin): the host prints the block it is given, so an
+            // absent key is an absent card rather than an empty one.
+            return array_filter([
                 'username' => $account['username'],
                 'password' => $account['password'],
-                'ftp_info' => $account['ftp_info'],
-            ];
+                'ftp_info' => $account['ftp_info'] ?? null,
+            ], static fn ($value): bool => $value !== null);
         }
 
         // WISECP 5 reads every key of this array as an instruction: "config"
@@ -138,8 +141,7 @@ class Panelica extends ServerModule
                 'url' => $this->panelUrl(),
             ],
             self::ACCOUNT_ID => $account[self::ACCOUNT_ID],
-            'ftp_info' => $account['ftp_info'],
-        ];
+        ] + (isset($account['ftp_info']) ? ['ftp_info' => $account['ftp_info']] : []);
     }
 
     /**
@@ -417,6 +419,15 @@ class Panelica extends ServerModule
             return $this->failed(__FUNCTION__, $e);
         }
 
+        // The accounts carry no domain and never did: an account is a user
+        // record and a domain is a separate record pointing at one, so an
+        // account owns none, one or many. Reading `primary_domain` off the
+        // account - which is what this did until 23 Nov 2026 - always produced
+        // an empty Domain column, and the operator then imported services with
+        // no domain on them. The domains are fetched separately and matched by
+        // owner.
+        $domains = $this->domainsByOwner();
+
         $rows = [];
 
         foreach ($accounts as $account) {
@@ -424,9 +435,11 @@ class Panelica extends ServerModule
                 continue;
             }
 
+            $id = (string) ($account['id'] ?? '');
+
             $rows[] = [
-                'cdate' => substr((string) ($account['created_at'] ?? ''), 0, 19) ?: '',
-                'domain' => (string) ($account['primary_domain'] ?? $account['domain'] ?? ''),
+                'cdate' => $this->listDate($account['created_at'] ?? ''),
+                'domain' => (string) ($domains[$id] ?? ''),
                 'username' => (string) ($account['username'] ?? ''),
                 'plan' => (string) ($account['plan']['name'] ?? $account['plan_name'] ?? ''),
                 'suspended' => in_array(strtolower((string) ($account['status'] ?? '')), ['suspended', 'inactive'], true),
@@ -434,6 +447,77 @@ class Panelica extends ServerModule
         }
 
         return $rows;
+    }
+
+    /**
+     * Every account's domain, keyed by the account it belongs to.
+     *
+     * The domains are an extra on this screen: the screen is about accounts,
+     * and an operator who cannot read domains - a key issued without
+     * `domains:read`, a panel too busy to answer, an older panel without the
+     * endpoint - still needs the account list. So a failure here is logged and
+     * answered with an empty map rather than taken up to the caller.
+     *
+     * An account that owns several domains is listed with the oldest, the one
+     * it was opened with. The panel answers newest first, so the order it
+     * happens to send cannot decide what the operator sees.
+     *
+     * @return array<string,string>
+     */
+    private function domainsByOwner(): array
+    {
+        try {
+            $domains = $this->api()->get('/v1/domains');
+        } catch (Exception $e) {
+            $this->logCall(__FUNCTION__, [], ['error' => $e->getMessage()]);
+
+            return [];
+        }
+
+        $oldest = [];
+        $byOwner = [];
+
+        foreach ($domains as $domain) {
+            if (! is_array($domain)) {
+                continue;
+            }
+
+            $owner = (string) ($domain['user_id'] ?? '');
+            $name = (string) ($domain['domain_name'] ?? $domain['domain'] ?? $domain['name'] ?? '');
+
+            if ($owner === '' || $name === '') {
+                continue;
+            }
+
+            // No created_at sorts last, so a dated domain always wins over one
+            // without a date rather than the answer order deciding.
+            $created = (string) ($domain['created_at'] ?? '~');
+
+            if (! isset($oldest[$owner]) || $created < $oldest[$owner]) {
+                $oldest[$owner] = $created;
+                $byOwner[$owner] = $name;
+            }
+        }
+
+        return $byOwner;
+    }
+
+    /**
+     * A panel timestamp in the shape this host's list expects.
+     *
+     * The panel answers ISO-8601 ("2026-02-03T04:05:06Z", sometimes with
+     * fractional seconds). Cutting the first 19 characters leaves the "T" in
+     * the middle, which the list then prints at the operator.
+     */
+    private function listDate(mixed $value): string
+    {
+        $text = trim((string) $value);
+
+        if ($text === '') {
+            return '';
+        }
+
+        return substr(str_replace('T', ' ', $text), 0, 19);
     }
 
     /**

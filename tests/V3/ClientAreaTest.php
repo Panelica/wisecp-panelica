@@ -55,9 +55,15 @@ final class ClientAreaTest extends ModuleTestCase
     {
         $page = $this->page();
 
-        // The theme wraps whatever is returned, so the page brings the markup
-        // its themes already style and nothing that would escape its layout.
-        $this->assertStringContainsString('<table width="100%" border="0" cellpadding="5">', $page);
+        // The theme drops this into its own card and styles the page with
+        // Bootstrap 5, so the page brings the theme's own row shape - a
+        // list-group of label/value items - rather than a bare table that
+        // inherits none of it (reported as a cluttered page on 3.1.9.8.2).
+        $this->assertStringContainsString('list-group list-group-flush', $page);
+        $this->assertStringContainsString('list-group-item d-flex justify-content-between', $page);
+        $this->assertStringNotContainsString('<table', $page);
+
+        // Whatever the shape, it is a fragment inside someone else's page.
         $this->assertStringNotContainsString('<html', $page);
         $this->assertStringNotContainsString('<script', $page);
     }

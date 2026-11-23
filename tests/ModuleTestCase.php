@@ -139,6 +139,14 @@ abstract class ModuleTestCase extends TestCase
     /** @param array<string,mixed> $order_options */
     protected function create(string $domain = '', array $order_options = []): mixed
     {
+        // Opening an account also opens its FTP login (PanelicaCore::
+        // openFtpLogin), so the fake answers that call unless the test under
+        // way has already said what should happen to it - a refusal, usually,
+        // because the refusal is its own behaviour.
+        if (! $this->api->answered('POST', '/v1/ftp-accounts')) {
+            $this->api->answer('POST', '/v1/ftp-accounts', ['id' => 'ftp-1', 'ftp_username' => $this->serviceUser]);
+        }
+
         return $this->module->create($domain, $order_options);
     }
 

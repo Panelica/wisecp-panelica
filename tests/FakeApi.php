@@ -43,6 +43,12 @@ final class FakeApi implements PanelicaApi
      * panel answers differently the second time - a refused address, then an
      * account. Both answers have to be sayable or the retry cannot be tested.
      */
+    /** Whether this path already has an answer, so a default does not overwrite one. */
+    public function answered(string $method, string $path): bool
+    {
+        return isset($this->answers[strtoupper($method) . ' ' . $path]);
+    }
+
     public function answerAgain(string $method, string $path, mixed $payload, int $status = 200): self
     {
         $this->repeats[strtoupper($method) . ' ' . $path][] = ['payload' => $payload, 'status' => $status];
