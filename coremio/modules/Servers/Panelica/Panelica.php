@@ -649,8 +649,8 @@ class Panelica extends ServerModule
         }
 
         return [
-            'SingleSignOn' => ['text' => $this->text('open_panel'), 'type' => 'function', 'target_blank' => true],
-            'webMail' => ['text' => $this->text('open_webmail'), 'type' => 'function', 'target_blank' => true],
+           // 'SingleSignOn' => ['text' => $this->text('open_panel'), 'type' => 'function', 'target_blank' => true],
+           // 'webMail' => ['text' => $this->text('open_webmail'), 'type' => 'function', 'target_blank' => true],
         ];
     }
 
