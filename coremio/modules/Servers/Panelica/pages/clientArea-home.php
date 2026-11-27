@@ -27,6 +27,9 @@ declare(strict_types=1);
  * @var string $plan
  * @var string $panel
  * @var string $nameservers
+ * @var string $ftp_user
+ * @var string $ftp_host
+ * @var int $ftp_port
  * @var array<string,array{used:float,limit:float}> $usage
  * @var string $error
  * @var object $module
@@ -65,6 +68,18 @@ $rows = [
     $t('status', 'Status') => $t('status_' . $status, $status),
     $t('nameservers', 'Nameservers') => $nameservers,
 ];
+
+// The FTP login, when the account has one. The host draws its own FTP card from
+// what create() returned, and an imported service never had a create() - so
+// without these rows an imported service showed the customer no FTP details at
+// all (BUG-01, 23 Nov 2026). No password row: the panel keeps a hash, so there
+// is no password to show, and printing the panel password here is the fault
+// this module was reported for (BUG-02). Empty rows drop out below.
+if (trim((string) ($ftp_user ?? '')) !== '') {
+    $rows[$t('ftp_username', 'FTP username')] = (string) $ftp_user;
+    $rows[$t('ftp_host', 'FTP host')] = (string) ($ftp_host ?? '');
+    $rows[$t('ftp_port', 'FTP port')] = (string) ($ftp_port ?? 21);
+}
 
 $gauges = [];
 foreach (['disk' => 'Disk', 'bandwidth' => 'Traffic'] as $key => $fallback) {

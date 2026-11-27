@@ -291,6 +291,11 @@ class Panelica extends ServerModule
                 'plan' => $this->item($facts['plan']),
                 'panel' => $this->item($facts['panel'], link: true),
                 'nameservers' => $this->item($facts['nameservers']),
+                // array_filter drops these when the account has no FTP login,
+                // so the rows appear only where there is something to type.
+                'ftp_username' => $this->item((string) $facts['ftp_user'], copyable: true),
+                'ftp_host' => $facts['ftp_user'] === '' ? [] : $this->item((string) $facts['ftp_host'], copyable: true),
+                'ftp_port' => $facts['ftp_user'] === '' ? [] : $this->item((string) $facts['ftp_port']),
             ]),
         ];
     }
@@ -560,9 +565,45 @@ class Panelica extends ServerModule
         return [
             'creation_info' => $after,
             'config' => $array($new['config'] ?? null),
-            'ftp_info' => $array($new['ftp_info'] ?? null),
+            // An imported service carries no FTP block: create() never ran for
+            // it, and create() was the only thing that ever built one. The
+            // customer's service page therefore showed no FTP card at all
+            // (BUG-01, reported 23 Nov 2026). It is filled from the panel here
+            // — this is the screen an operator opens after an import — and
+            // only when it is empty, so a block already stored, or one the
+            // operator typed over, is never touched.
+            'ftp_info' => $this->ftpInfoOrFill($array($new['ftp_info'] ?? null)),
             'options' => $array($new['options'] ?? null),
         ];
+    }
+
+    /**
+     * The FTP block to store: the one given, or one read from the panel when
+     * none was given.
+     *
+     * Deliberately quiet. The save this runs inside is about the service's
+     * plan; a panel that cannot answer about FTP logins, or a key issued
+     * without them, must not fail that save. An unfillable block stays empty,
+     * which is the state the service was already in.
+     *
+     * @param array<string,mixed> $given
+     * @return array<string,mixed>
+     */
+    private function ftpInfoOrFill(array $given): array
+    {
+        if ($given !== []) {
+            return $given;
+        }
+
+        try {
+            $filled = $this->ftpInfoFor($this->accountId(false), $this->serviceUsername());
+        } catch (Exception $e) {
+            $this->logCall(__FUNCTION__, [], ['error' => $e->getMessage()]);
+
+            return $given;
+        }
+
+        return $filled ?? $given;
     }
 
     /**
@@ -766,6 +807,16 @@ class Panelica extends ServerModule
             'panel' => $this->panelUrl(),
             'nameservers' => $this->nameservers(),
             'usage' => $this->usage(),
+            // The FTP login the customer has to type. Shown on the service page
+            // of both generations, because the FTP card the HOST draws is built
+            // from what create() returned and an imported service never had a
+            // create() (BUG-01, 23 Nov 2026): without this an imported service
+            // showed the customer no FTP details anywhere. Read-only — a page
+            // being looked at creates nothing. No password: the panel keeps a
+            // hash, so there is none to show.
+            'ftp_user' => $this->ftpLoginName($this->accountId(false)),
+            'ftp_host' => $this->panelHost(),
+            'ftp_port' => 21,
         ];
     }
 
@@ -780,6 +831,9 @@ class Panelica extends ServerModule
             'panel' => $this->panelUrl(),
             'nameservers' => $this->nameservers(),
             'usage' => [],
+            'ftp_user' => '',
+            'ftp_host' => $this->panelHost(),
+            'ftp_port' => 21,
         ];
     }
 

@@ -425,8 +425,14 @@ trait PanelicaCore
 
         // "new_password", which is what the endpoint requires; "password" was
         // refused with "Invalid Request Body", measured on a live panel.
-        $this->api()->post('/v1/accounts/' . $this->accountId() . '/change-password', ['new_password' => $password]);
+        $accountId = $this->accountId();
+
+        $this->api()->post('/v1/accounts/' . $accountId . '/change-password', ['new_password' => $password]);
         $this->rememberPassword($password);
+
+        // The FTP login follows, so what the host shows under its FTP heading
+        // is a password that actually opens the FTP account (BUG-02).
+        $this->syncFtpPassword($accountId, $this->serviceUsername(), $password);
 
         return true;
     }
@@ -610,8 +616,6 @@ trait PanelicaCore
         $this->rememberAccountId($id);
         $this->rememberPassword($password);
 
-        $host = $this->panelHost();
-
         $result = [
             'username' => $username,
             'password' => $password,
@@ -630,16 +634,36 @@ trait PanelicaCore
         $ftpUser = $this->openFtpLogin($id, $username, $password);
 
         if ($ftpUser !== null) {
-            $result['ftp_info'] = [
-                'ip' => (string) ($this->hostArray('server')['ip'] ?? ''),
-                'host' => $host !== '' ? $host : (string) ($this->hostArray('server')['ip'] ?? ''),
-                'username' => $ftpUser,
-                'password' => $password,
-                'port' => 21,
-            ];
+            $result['ftp_info'] = $this->ftpBlock($ftpUser, $password);
         }
 
         return $result;
+    }
+
+    /**
+     * The block the host prints under its "FTP" heading.
+     *
+     * One place builds it, so the shape cannot drift between a freshly opened
+     * account and one that was imported. An empty password is left OUT rather
+     * than printed as a blank field: for an account whose FTP login already
+     * existed the panel keeps only a hash, so there is no password to show and
+     * inventing one would be the very fault this module was reported for
+     * (BUG-02).
+     *
+     * @return array<string,mixed>
+     */
+    private function ftpBlock(string $username, string $password): array
+    {
+        $ip = (string) ($this->hostArray('server')['ip'] ?? '');
+        $host = $this->panelHost();
+
+        return array_filter([
+            'ip' => $ip,
+            'host' => $host !== '' ? $host : $ip,
+            'username' => $username,
+            'password' => $password,
+            'port' => 21,
+        ], static fn (mixed $value): bool => $value !== '');
     }
 
     /**
@@ -683,6 +707,180 @@ trait PanelicaCore
         }
 
         return $name !== '' ? $name : $username;
+    }
+
+    /**
+     * The account's FTP logins as the panel holds them, oldest first.
+     *
+     * The list endpoint takes no owner filter — a Root key is answered with
+     * every FTP login on the server — so the owner is matched here. A failure
+     * is logged and answered with an empty list: this is used to decorate a
+     * screen, and an operator whose key cannot read FTP logins still needs the
+     * screen.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private function ftpLoginsOf(string $accountId): array
+    {
+        if ($accountId === '') {
+            return [];
+        }
+
+        try {
+            $rows = $this->api()->get('/v1/ftp-accounts');
+        } catch (Exception $e) {
+            $this->logCall(__FUNCTION__, ['user_id' => $accountId], ['error' => $e->getMessage()]);
+
+            return [];
+        }
+
+        $mine = [];
+
+        foreach ($rows as $row) {
+            if (! is_array($row) || (string) ($row['user_id'] ?? '') !== $accountId) {
+                continue;
+            }
+            $mine[] = $row;
+        }
+
+        // No created_at sorts last, so a dated login always wins over one
+        // without a date rather than the answer order deciding (the same rule
+        // domainsByOwner() follows).
+        usort($mine, static fn (array $a, array $b): int => strcmp(
+            (string) ($a['created_at'] ?? '~'),
+            (string) ($b['created_at'] ?? '~')
+        ));
+
+        return $mine;
+    }
+
+    /**
+     * An ftp_info block for an account that ALREADY exists, or null when there
+     * is nothing honest to show.
+     *
+     * Why this exists (BUG-01, reported 23 Nov 2026): the block was only ever
+     * built by create(). An account opened by hand in the panel and then
+     * imported into the host had no block at all, so the customer's service
+     * page showed no FTP card; it appeared only after a password change.
+     *
+     * Two cases, and the difference matters:
+     *
+     *   - The account already has an FTP login. Its name is returned with the
+     *     host and the port, and NO password: the panel keeps only a hash, so
+     *     the module does not know the password and must not print a guess.
+     *     The customer can set one from the panel.
+     *   - The account has none — which is the normal state of an account opened
+     *     by hand, because opening an account creates no FTP login. One is
+     *     opened here with a fresh password, exactly as create() does, and that
+     *     password is known so it is included. Nothing is taken away from the
+     *     account: before this there was no FTP login to lose.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function ftpInfoFor(string $accountId, string $username): ?array
+    {
+        if ($accountId === '' || $username === '') {
+            return null;
+        }
+
+        $logins = $this->ftpLoginsOf($accountId);
+
+        if ($logins !== []) {
+            $name = '';
+            foreach ($logins as $login) {
+                foreach (['ftp_username', 'username'] as $key) {
+                    if (isset($login[$key]) && is_string($login[$key]) && $login[$key] !== '') {
+                        $name = $login[$key];
+                        break 2;
+                    }
+                }
+            }
+
+            return $name === '' ? null : $this->ftpBlock($name, '');
+        }
+
+        $password = $this->password([]);
+        $opened = $this->openFtpLogin($accountId, $username, $password);
+
+        return $opened === null ? null : $this->ftpBlock($opened, $password);
+    }
+
+    /**
+     * The name of the FTP login the customer should type, or '' when the
+     * account has none.
+     *
+     * Read-only on purpose. This is what the service page shows, and a page
+     * being looked at must not create anything on the panel: an account with no
+     * FTP login simply shows no FTP rows. Opening one is an operator action and
+     * happens on the service form (Panelica::ftpInfoOrFill).
+     */
+    private function ftpLoginName(string $accountId): string
+    {
+        foreach ($this->ftpLoginsOf($accountId) as $login) {
+            foreach (['ftp_username', 'username'] as $key) {
+                if (isset($login[$key]) && is_string($login[$key]) && $login[$key] !== '') {
+                    return $login[$key];
+                }
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * The FTP login's password, moved with the panel password.
+     *
+     * Why (BUG-02, reported 23 Nov 2026): changing the password changed the
+     * PANEL account's password and nothing else, while the host went on showing
+     * that password under its FTP heading. The customer read a password that
+     * did not open their FTP account. The module's design is one secret for
+     * both — create() opens the FTP login with the same password on purpose —
+     * and this is the half that was missing.
+     *
+     * Non-fatal on purpose: the panel password has already changed by the time
+     * this runs, so a refusal here must not report the whole change as failed.
+     * It is logged, and the FTP login keeps its old password.
+     *
+     * Only the login this module would have opened is touched: the one named
+     * after the account, or the only one there is. An account carrying several
+     * logins the operator made themselves is left alone — changing a password
+     * nobody asked about is worse than leaving one out of step.
+     */
+    private function syncFtpPassword(string $accountId, string $username, string $password): void
+    {
+        $logins = $this->ftpLoginsOf($accountId);
+
+        if ($logins === []) {
+            return;
+        }
+
+        $target = null;
+
+        foreach ($logins as $login) {
+            $name = (string) ($login['ftp_username'] ?? $login['username'] ?? '');
+            if ($name !== '' && strcasecmp($name, $username) === 0) {
+                $target = $login;
+                break;
+            }
+        }
+
+        if ($target === null && count($logins) === 1) {
+            $target = $logins[0];
+        }
+
+        $id = trim((string) ($target['id'] ?? ''));
+
+        if ($id === '') {
+            $this->logCall(__FUNCTION__, ['user_id' => $accountId, 'username' => $username], ['skipped' => 'no single FTP login to follow the panel password']);
+
+            return;
+        }
+
+        try {
+            $this->api()->post('/v1/ftp-accounts/' . $id . '/change-password', ['password' => $password]);
+        } catch (Exception $e) {
+            $this->logCall(__FUNCTION__, ['ftp_id' => $id], ['error' => $e->getMessage()]);
+        }
     }
 
     /**
