@@ -138,6 +138,45 @@ final class FtpDetailsTest extends ModuleTestCase
         $this->assertArrayNotHasKey('ftp_username', $info);
     }
 
+    /** The owner is asked for, rather than the whole server's list being read. */
+    public function test_the_owner_is_asked_for_by_the_endpoint(): void
+    {
+        $this->module();
+        $this->givenAccount('acc-1', ['status' => 'active']);
+        $this->api->answer('GET', '/v1/ftp-accounts?user_id=acc-1', [
+            ['id' => 'ftp-9', 'user_id' => 'acc-1', 'ftp_username' => 'importeduser'],
+        ]);
+
+        $this->serverInfo();
+
+        $this->assertTrue(
+            $this->api->made('GET', '/v1/ftp-accounts?user_id=acc-1'),
+            'the whole server\'s FTP list was read to settle a question about one account'
+        );
+    }
+
+    /**
+     * A panel from before the filter existed ignores it and answers with every
+     * FTP login on the server. Taking that at face value would show one
+     * customer another customer's login, so the module matches the owner again
+     * itself - the answer here carries a stranger's row and it must not appear.
+     */
+    public function test_an_older_panel_that_ignores_the_filter_is_still_safe(): void
+    {
+        $this->module();
+        $this->givenAccount('acc-1', ['status' => 'active']);
+        // Registered on the bare path, which is what an older panel answers
+        // for the filtered call too.
+        $this->api->answer('GET', '/v1/ftp-accounts', [
+            ['id' => 'ftp-x', 'user_id' => 'acc-2', 'ftp_username' => 'someone-else'],
+            ['id' => 'ftp-9', 'user_id' => 'acc-1', 'ftp_username' => 'importeduser'],
+        ]);
+
+        $info = $this->serverInfo();
+
+        $this->assertSame('importeduser', $info['ftp_username']['value'] ?? null);
+    }
+
     /** Only this account's login, although the list answers with every one. */
     public function test_another_accounts_login_is_not_shown(): void
     {

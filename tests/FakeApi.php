@@ -136,6 +136,19 @@ final class FakeApi implements PanelicaApi
         $this->calls[] = ['method' => $method, 'path' => $path, 'body' => $body];
         $key = $method . ' ' . $path;
 
+        // A query string is a filter, not a different endpoint: the panel
+        // answers /v1/ftp-accounts whether or not ?user_id= is on it. So an
+        // answer registered for the bare path serves the filtered call too,
+        // which is also what an OLDER panel does - it ignores a parameter it
+        // does not know. A test that cares the filter was sent asserts on
+        // made() instead, which records the path as the module asked for it.
+        if (! array_key_exists($key, $this->answers) && str_contains($path, '?')) {
+            $bare = $method . ' ' . strtok($path, '?');
+            if (array_key_exists($bare, $this->answers)) {
+                $key = $bare;
+            }
+        }
+
         if (! array_key_exists($key, $this->answers)) {
             // An unanswered call is a test saying one thing and the module doing
             // another: louder as a failure than as an empty array.

@@ -97,9 +97,11 @@ final class FtpTest extends ModuleTestCase
     }
 
     /**
-     * The list endpoint takes no owner filter - a Root key is answered with
-     * every FTP login on the server - so the owner is matched in the module.
-     * Another account's login is not this one's to change.
+     * The owner is asked for, but the module does not take the answer on
+     * trust: a panel from before the filter existed ignores it and answers
+     * with every login on the server. The answer here is registered on the
+     * bare path, which is what such a panel gives back, and it carries another
+     * account's login - which is not this one's to change.
      */
     public function test_another_accounts_ftp_login_is_not_touched(): void
     {
@@ -113,6 +115,25 @@ final class FtpTest extends ModuleTestCase
 
         $this->assertNotFalse($this->module->change_password('New-Pass-123'));
         $this->assertFalse($this->api->made('POST', '/v1/ftp-accounts/ftp-other/change-password'));
+    }
+
+    /**
+     * Moving the password asks the panel about ONE account's logins, not about
+     * every login on the server.
+     */
+    public function test_the_password_move_asks_for_the_owner_only(): void
+    {
+        $this->module();
+        $this->givenAccount();
+        $this->api
+            ->answer('POST', '/v1/accounts/acc-1/change-password', ['status' => 'success'])
+            ->answer('GET', '/v1/ftp-accounts?user_id=acc-1', [
+                ['id' => 'ftp-9', 'user_id' => 'acc-1', 'ftp_username' => $this->serviceUser],
+            ])
+            ->answer('POST', '/v1/ftp-accounts/ftp-9/change-password', ['status' => 'success']);
+
+        $this->assertNotFalse($this->module->change_password('New-Pass-123'));
+        $this->assertTrue($this->api->made('GET', '/v1/ftp-accounts?user_id=acc-1'));
     }
 
     /** A panel that cannot answer about FTP logins still changes the password. */

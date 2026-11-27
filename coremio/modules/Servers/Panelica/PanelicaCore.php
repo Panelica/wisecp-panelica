@@ -712,11 +712,21 @@ trait PanelicaCore
     /**
      * The account's FTP logins as the panel holds them, oldest first.
      *
-     * The list endpoint takes no owner filter — a Root key is answered with
-     * every FTP login on the server — so the owner is matched here. A failure
-     * is logged and answered with an empty list: this is used to decorate a
-     * screen, and an operator whose key cannot read FTP logins still needs the
-     * screen.
+     * The owner is asked for with ?user_id= AND matched again here, and both
+     * halves are needed:
+     *
+     *   - The parameter is what keeps this cheap. Without it a Root key is
+     *     answered with every FTP login on the server to settle a question
+     *     about one account, which on a full server is a long answer for one
+     *     row. Panels from before the parameter existed simply ignore it.
+     *   - The match stays because of exactly those older panels: one that
+     *     ignores the parameter answers with everything, and taking that at
+     *     face value would show one customer another customer's FTP login.
+     *     The module never trusts the server to have narrowed it.
+     *
+     * A failure is logged and answered with an empty list: this is used to
+     * decorate a screen, and an operator whose key cannot read FTP logins
+     * still needs the screen.
      *
      * @return array<int,array<string,mixed>>
      */
@@ -727,7 +737,7 @@ trait PanelicaCore
         }
 
         try {
-            $rows = $this->api()->get('/v1/ftp-accounts');
+            $rows = $this->api()->get('/v1/ftp-accounts?user_id=' . rawurlencode($accountId));
         } catch (Exception $e) {
             $this->logCall(__FUNCTION__, ['user_id' => $accountId], ['error' => $e->getMessage()]);
 
