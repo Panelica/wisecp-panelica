@@ -118,9 +118,9 @@ foreach (['disk' => 'Disk', 'bandwidth' => 'Traffic'] as $key => $fallback) {
             </li>
         <?php endforeach; ?>
     </ul>
-    <?php if (trim((string) ($panel ?? '')) !== ''): ?>
+  <!--  <?php if (trim((string) ($panel ?? '')) !== ''): ?>
         <div class="card-footer text-center">
             <a class="btn btn-primary" href="<?= $e($panel) ?>" target="_blank" rel="noopener noreferrer"><?= $e($t('open_panel', 'Open the panel')) ?></a>
-        </div>
+        </div> -->
     <?php endif; ?>
 </section>
